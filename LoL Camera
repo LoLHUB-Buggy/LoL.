@@ -1,0 +1,595 @@
+-- ══════════════════════════════════════════════════════════
+--   RIVALS | Camera Alignment GUI
+--   Toggle: [T] keyboard  |  Tap the hub button on mobile
+--   Open / Close: hub orb (bottom-right)
+-- ══════════════════════════════════════════════════════════
+
+local Players            = game:GetService("Players")
+local RunService         = game:GetService("RunService")
+local UserInputService   = game:GetService("UserInputService")
+local TweenService       = game:GetService("TweenService")
+local Camera             = workspace.CurrentCamera
+local LocalPlayer        = Players.LocalPlayer
+local Mouse              = LocalPlayer:GetMouse()
+
+-- ── Config ─────────────────────────────────────────────────
+local TOGGLE_KEY = Enum.KeyCode.T
+local THEME = {
+    BG          = Color3.fromRGB(10,  10,  18),   -- near-black
+    PANEL       = Color3.fromRGB(16,  16,  28),   -- panel surface
+    CARD        = Color3.fromRGB(22,  22,  38),   -- card surface
+    ACCENT      = Color3.fromRGB(99,  102, 241),  -- indigo
+    ACCENT2     = Color3.fromRGB(168, 85,  247),  -- violet
+    ON          = Color3.fromRGB(52,  211, 153),  -- emerald ON
+    OFF         = Color3.fromRGB(239, 68,  68),   -- red OFF
+    TEXT        = Color3.fromRGB(240, 240, 255),
+    SUBTEXT     = Color3.fromRGB(148, 148, 180),
+    BORDER      = Color3.fromRGB(40,  40,  65),
+    HUB_BG      = Color3.fromRGB(99,  102, 241),
+}
+
+-- ── State ───────────────────────────────────────────────────
+local alignEnabled  = false
+local connection    = nil
+local guiOpen       = false
+local dragging      = false
+local dragStart, startPos
+
+-- ═══════════════════════════════════════════════════════════
+--  CAMERA ALIGNMENT CORE
+-- ═══════════════════════════════════════════════════════════
+local function getRoot()
+    local char = LocalPlayer.Character
+    return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+local function alignToCamera()
+    local root = getRoot()
+    if not root then return end
+    local look = Camera.CFrame.LookVector
+    local flat = Vector3.new(look.X, 0, look.Z)
+    if flat.Magnitude < 0.001 then return end
+    root.CFrame = CFrame.new(root.Position, root.Position + flat.Unit)
+end
+
+local function enableAlign()
+    if connection then return end
+    connection = RunService.RenderStepped:Connect(alignToCamera)
+end
+
+local function disableAlign()
+    if connection then connection:Disconnect(); connection = nil end
+end
+
+-- ═══════════════════════════════════════════════════════════
+--  GUI CONSTRUCTION
+-- ═══════════════════════════════════════════════════════════
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name            = "RivalsGUI"
+ScreenGui.ResetOnSpawn    = false
+ScreenGui.ZIndexBehavior  = Enum.ZIndexBehavior.Sibling
+ScreenGui.IgnoreGuiInset  = true
+ScreenGui.Parent          = LocalPlayer:WaitForChild("PlayerGui")
+
+-- ── Helpers ─────────────────────────────────────────────────
+local function corner(inst, radius)
+    local c = Instance.new("UICorner", inst)
+    c.CornerRadius = UDim.new(0, radius or 12)
+end
+
+local function stroke(inst, color, thickness)
+    local s = Instance.new("UIStroke", inst)
+    s.Color     = color or THEME.BORDER
+    s.Thickness = thickness or 1
+    s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+end
+
+local function gradient(inst, c0, c1, rot)
+    local g = Instance.new("UIGradient", inst)
+    g.Color    = ColorSequence.new(c0, c1)
+    g.Rotation = rot or 135
+end
+
+local function label(parent, text, size, color, font, pos, anc)
+    local l = Instance.new("TextLabel", parent)
+    l.Text              = text
+    l.TextSize          = size or 14
+    l.TextColor3        = color or THEME.TEXT
+    l.Font              = font or Enum.Font.GothamBold
+    l.BackgroundTransparency = 1
+    l.Position          = pos or UDim2.new(0,0,0,0)
+    l.Size              = UDim2.new(1,0,1,0)
+    l.AnchorPoint       = anc or Vector2.new(0,0)
+    l.TextXAlignment    = Enum.TextXAlignment.Left
+    return l
+end
+
+local function tween(obj, props, t, style, dir)
+    TweenService:Create(obj,
+        TweenInfo.new(t or 0.25, style or Enum.EasingStyle.Quart,
+                      dir  or Enum.EasingDirection.Out), props):Play()
+end
+
+-- ═══════════════════════════════════════════════════════════
+--  HUB BUTTON (always visible, bottom-right)
+-- ═══════════════════════════════════════════════════════════
+local Hub = Instance.new("ImageButton", ScreenGui)
+Hub.Name              = "Hub"
+Hub.Size              = UDim2.new(0, 58, 0, 58)
+Hub.Position          = UDim2.new(1, -74, 1, -90)
+Hub.AnchorPoint       = Vector2.new(0, 0)
+Hub.BackgroundColor3  = THEME.HUB_BG
+Hub.Image             = ""
+Hub.ZIndex            = 20
+corner(Hub, 29)
+stroke(Hub, Color3.fromRGB(168, 85, 247), 2)
+
+-- gradient on hub
+local hubGrad = Instance.new("UIGradient", Hub)
+hubGrad.Color    = ColorSequence.new(Color3.fromRGB(99,102,241), Color3.fromRGB(168,85,247))
+hubGrad.Rotation = 135
+
+-- icon label
+local HubIcon = Instance.new("TextLabel", Hub)
+HubIcon.Text              = "⊕"
+HubIcon.TextSize          = 26
+HubIcon.TextColor3        = Color3.fromRGB(255,255,255)
+HubIcon.Font              = Enum.Font.GothamBold
+HubIcon.BackgroundTransparency = 1
+HubIcon.Size              = UDim2.new(1,0,1,0)
+HubIcon.TextXAlignment    = Enum.TextXAlignment.Center
+
+-- hub glow
+local HubShadow = Instance.new("Frame", ScreenGui)
+HubShadow.Size            = UDim2.new(0, 80, 0, 80)
+HubShadow.Position        = UDim2.new(1, -83, 1, -99)
+HubShadow.BackgroundColor3= Color3.fromRGB(99,102,241)
+HubShadow.BackgroundTransparency = 0.75
+HubShadow.ZIndex          = 19
+HubShadow.BorderSizePixel = 0
+corner(HubShadow, 40)
+
+-- ═══════════════════════════════════════════════════════════
+--  MAIN PANEL
+-- ═══════════════════════════════════════════════════════════
+local Panel = Instance.new("Frame", ScreenGui)
+Panel.Name              = "Panel"
+Panel.Size              = UDim2.new(0, 320, 0, 420)
+Panel.Position          = UDim2.new(0.5, -160, 0.5, -210)
+Panel.BackgroundColor3  = THEME.PANEL
+Panel.ZIndex            = 10
+Panel.Visible           = false
+Panel.ClipsDescendants  = true
+Panel.BorderSizePixel   = 0
+corner(Panel, 18)
+stroke(Panel, THEME.BORDER, 1.5)
+
+-- subtle top gradient strip
+local topStrip = Instance.new("Frame", Panel)
+topStrip.Size             = UDim2.new(1, 0, 0, 4)
+topStrip.Position         = UDim2.new(0,0,0,0)
+topStrip.BackgroundColor3 = Color3.fromRGB(99,102,241)
+topStrip.BorderSizePixel  = 0
+topStrip.ZIndex           = 11
+gradient(topStrip, Color3.fromRGB(99,102,241), Color3.fromRGB(168,85,247), 90)
+
+-- panel background gradient
+gradient(Panel, Color3.fromRGB(16,16,28), Color3.fromRGB(12,12,22), 160)
+
+-- ── Title bar ───────────────────────────────────────────────
+local TitleBar = Instance.new("Frame", Panel)
+TitleBar.Size             = UDim2.new(1, 0, 0, 56)
+TitleBar.BackgroundTransparency = 1
+TitleBar.ZIndex           = 12
+TitleBar.BorderSizePixel  = 0
+
+local TitleIcon = Instance.new("TextLabel", TitleBar)
+TitleIcon.Text            = "◈"
+TitleIcon.TextSize        = 20
+TitleIcon.TextColor3      = THEME.ACCENT
+TitleIcon.Font            = Enum.Font.GothamBold
+TitleIcon.BackgroundTransparency = 1
+TitleIcon.Size            = UDim2.new(0,32,1,0)
+TitleIcon.Position        = UDim2.new(0,16,0,0)
+TitleIcon.ZIndex          = 12
+
+local TitleText = Instance.new("TextLabel", TitleBar)
+TitleText.Text            = "RIVALS"
+TitleText.TextSize        = 17
+TitleText.TextColor3      = THEME.TEXT
+TitleText.Font            = Enum.Font.GothamBold
+TitleText.BackgroundTransparency = 1
+TitleText.Size            = UDim2.new(0,140,1,0)
+TitleText.Position        = UDim2.new(0, 46, 0, 0)
+TitleText.TextXAlignment  = Enum.TextXAlignment.Left
+TitleText.ZIndex          = 12
+
+local SubText = Instance.new("TextLabel", TitleBar)
+SubText.Text              = "Camera Suite"
+SubText.TextSize          = 11
+SubText.TextColor3        = THEME.SUBTEXT
+SubText.Font              = Enum.Font.Gotham
+SubText.BackgroundTransparency = 1
+SubText.Size              = UDim2.new(0,140,0,14)
+SubText.Position          = UDim2.new(0,46, 0, 30)
+SubText.TextXAlignment    = Enum.TextXAlignment.Left
+SubText.ZIndex            = 12
+
+-- close button
+local CloseBtn = Instance.new("TextButton", TitleBar)
+CloseBtn.Text             = "✕"
+CloseBtn.TextSize         = 14
+CloseBtn.TextColor3       = THEME.SUBTEXT
+CloseBtn.Font             = Enum.Font.GothamBold
+CloseBtn.Size             = UDim2.new(0,32,0,32)
+CloseBtn.Position         = UDim2.new(1,-44,0.5,-16)
+CloseBtn.BackgroundColor3 = Color3.fromRGB(30,30,50)
+CloseBtn.ZIndex           = 12
+corner(CloseBtn, 8)
+
+-- divider
+local Divider = Instance.new("Frame", Panel)
+Divider.Size              = UDim2.new(1,-32,0,1)
+Divider.Position          = UDim2.new(0,16,0,56)
+Divider.BackgroundColor3  = THEME.BORDER
+Divider.BorderSizePixel   = 0
+Divider.ZIndex            = 11
+
+-- ── Status badge ────────────────────────────────────────────
+local StatusCard = Instance.new("Frame", Panel)
+StatusCard.Size           = UDim2.new(1,-32,0,68)
+StatusCard.Position       = UDim2.new(0,16,0,72)
+StatusCard.BackgroundColor3 = THEME.CARD
+StatusCard.BorderSizePixel= 0
+StatusCard.ZIndex         = 11
+corner(StatusCard, 12)
+stroke(StatusCard, THEME.BORDER)
+
+local StatusDot = Instance.new("Frame", StatusCard)
+StatusDot.Size            = UDim2.new(0,10,0,10)
+StatusDot.Position        = UDim2.new(0,16,0.5,-5)
+StatusDot.BackgroundColor3= THEME.OFF
+StatusDot.BorderSizePixel = 0
+StatusDot.ZIndex          = 12
+corner(StatusDot, 5)
+
+local StatusLabel = Instance.new("TextLabel", StatusCard)
+StatusLabel.Text          = "INACTIVE"
+StatusLabel.TextSize      = 13
+StatusLabel.TextColor3    = THEME.OFF
+StatusLabel.Font          = Enum.Font.GothamBold
+StatusLabel.BackgroundTransparency = 1
+StatusLabel.Size          = UDim2.new(0,120,1,0)
+StatusLabel.Position      = UDim2.new(0,34,0,0)
+StatusLabel.TextXAlignment= Enum.TextXAlignment.Left
+StatusLabel.ZIndex        = 12
+
+local StatusSub = Instance.new("TextLabel", StatusCard)
+StatusSub.Text            = "Camera alignment is off"
+StatusSub.TextSize        = 11
+StatusSub.TextColor3      = THEME.SUBTEXT
+StatusSub.Font            = Enum.Font.Gotham
+StatusSub.BackgroundTransparency = 1
+StatusSub.Size            = UDim2.new(1,-32,0,16)
+StatusSub.Position        = UDim2.new(0,34,1,-24)
+StatusSub.TextXAlignment  = Enum.TextXAlignment.Left
+StatusSub.ZIndex          = 12
+
+-- key hint (top-right of card)
+local KeyHint = Instance.new("TextLabel", StatusCard)
+KeyHint.Text              = "[T]"
+KeyHint.TextSize          = 11
+KeyHint.TextColor3        = THEME.ACCENT
+KeyHint.Font              = Enum.Font.GothamBold
+KeyHint.BackgroundTransparency = 1
+KeyHint.Size              = UDim2.new(0,40,1,0)
+KeyHint.Position          = UDim2.new(1,-52,0,0)
+KeyHint.TextXAlignment    = Enum.TextXAlignment.Center
+KeyHint.ZIndex            = 12
+
+-- ── Section label ───────────────────────────────────────────
+local SecLabel = Instance.new("TextLabel", Panel)
+SecLabel.Text             = "CONTROLS"
+SecLabel.TextSize         = 10
+SecLabel.TextColor3       = THEME.SUBTEXT
+SecLabel.Font             = Enum.Font.GothamBold
+SecLabel.BackgroundTransparency = 1
+SecLabel.Size             = UDim2.new(1,-32,0,18)
+SecLabel.Position         = UDim2.new(0,16,0,152)
+SecLabel.TextXAlignment   = Enum.TextXAlignment.Left
+SecLabel.ZIndex           = 11
+SecLabel.TextTransparency = 0.3
+
+-- ── Toggle button ───────────────────────────────────────────
+local ToggleBtn = Instance.new("TextButton", Panel)
+ToggleBtn.Text            = ""
+ToggleBtn.Size            = UDim2.new(1,-32,0,56)
+ToggleBtn.Position        = UDim2.new(0,16,0,176)
+ToggleBtn.BackgroundColor3= THEME.CARD
+ToggleBtn.BorderSizePixel = 0
+ToggleBtn.ZIndex          = 11
+corner(ToggleBtn, 12)
+stroke(ToggleBtn, THEME.BORDER)
+
+local ToggleIcon = Instance.new("TextLabel", ToggleBtn)
+ToggleIcon.Text           = "⊙"
+ToggleIcon.TextSize       = 20
+ToggleIcon.TextColor3     = THEME.SUBTEXT
+ToggleIcon.Font           = Enum.Font.GothamBold
+ToggleIcon.BackgroundTransparency = 1
+ToggleIcon.Size           = UDim2.new(0,36,1,0)
+ToggleIcon.Position       = UDim2.new(0,12,0,0)
+ToggleIcon.TextXAlignment = Enum.TextXAlignment.Center
+ToggleIcon.ZIndex         = 12
+
+local ToggleLabel = Instance.new("TextLabel", ToggleBtn)
+ToggleLabel.Text          = "Camera Alignment"
+ToggleLabel.TextSize      = 13
+ToggleLabel.TextColor3    = THEME.TEXT
+ToggleLabel.Font          = Enum.Font.GothamBold
+ToggleLabel.BackgroundTransparency = 1
+ToggleLabel.Size          = UDim2.new(0,160,0,20)
+ToggleLabel.Position      = UDim2.new(0,52,0.5,-10)
+ToggleLabel.TextXAlignment= Enum.TextXAlignment.Left
+ToggleLabel.ZIndex        = 12
+
+local ToggleSub2 = Instance.new("TextLabel", ToggleBtn)
+ToggleSub2.Text           = "Align HRP to camera look"
+ToggleSub2.TextSize       = 10
+ToggleSub2.TextColor3     = THEME.SUBTEXT
+ToggleSub2.Font           = Enum.Font.Gotham
+ToggleSub2.BackgroundTransparency = 1
+ToggleSub2.Size           = UDim2.new(0,180,0,14)
+ToggleSub2.Position       = UDim2.new(0,52,1,-20)
+ToggleSub2.TextXAlignment = Enum.TextXAlignment.Left
+ToggleSub2.ZIndex         = 12
+
+-- pill switch on the right
+local PillBg = Instance.new("Frame", ToggleBtn)
+PillBg.Size               = UDim2.new(0,48,0,26)
+PillBg.Position           = UDim2.new(1,-60,0.5,-13)
+PillBg.BackgroundColor3   = THEME.OFF
+PillBg.BorderSizePixel    = 0
+PillBg.ZIndex             = 12
+corner(PillBg, 13)
+
+local PillKnob = Instance.new("Frame", PillBg)
+PillKnob.Size             = UDim2.new(0,20,0,20)
+PillKnob.Position         = UDim2.new(0,3,0.5,-10)
+PillKnob.BackgroundColor3 = Color3.fromRGB(255,255,255)
+PillKnob.BorderSizePixel  = 0
+PillKnob.ZIndex           = 13
+corner(PillKnob, 10)
+
+-- ── Info cards row ──────────────────────────────────────────
+local InfoRow = Instance.new("Frame", Panel)
+InfoRow.Size              = UDim2.new(1,-32,0,72)
+InfoRow.Position          = UDim2.new(0,16,0,246)
+InfoRow.BackgroundTransparency = 1
+InfoRow.ZIndex            = 11
+
+local function infoCard(parent, icon, title, val, xPos)
+    local card = Instance.new("Frame", parent)
+    card.Size             = UDim2.new(0,86,1,0)
+    card.Position         = UDim2.new(0,xPos,0,0)
+    card.BackgroundColor3 = THEME.CARD
+    card.BorderSizePixel  = 0
+    card.ZIndex           = 11
+    corner(card, 10)
+    stroke(card, THEME.BORDER)
+
+    local ico = Instance.new("TextLabel", card)
+    ico.Text              = icon
+    ico.TextSize          = 18
+    ico.TextColor3        = THEME.ACCENT
+    ico.Font              = Enum.Font.GothamBold
+    ico.BackgroundTransparency = 1
+    ico.Size              = UDim2.new(1,0,0,28)
+    ico.Position          = UDim2.new(0,0,0,8)
+    ico.TextXAlignment    = Enum.TextXAlignment.Center
+    ico.ZIndex            = 12
+
+    local t = Instance.new("TextLabel", card)
+    t.Text                = title
+    t.TextSize            = 9
+    t.TextColor3          = THEME.SUBTEXT
+    t.Font                = Enum.Font.Gotham
+    t.BackgroundTransparency = 1
+    t.Size                = UDim2.new(1,-4,0,14)
+    t.Position            = UDim2.new(0,2,0,34)
+    t.TextXAlignment      = Enum.TextXAlignment.Center
+    t.ZIndex              = 12
+
+    local v = Instance.new("TextLabel", card)
+    v.Name                = "Val"
+    v.Text                = val
+    v.TextSize            = 11
+    v.TextColor3          = THEME.TEXT
+    v.Font                = Enum.Font.GothamBold
+    v.BackgroundTransparency = 1
+    v.Size                = UDim2.new(1,-4,0,16)
+    v.Position            = UDim2.new(0,2,0,50)
+    v.TextXAlignment      = Enum.TextXAlignment.Center
+    v.ZIndex              = 12
+
+    return card, v
+end
+
+local card1, val1 = infoCard(InfoRow, "◎", "MODE",    "XZ Flat",  0)
+local card2, val2 = infoCard(InfoRow, "⌚", "RATE",    "Render",   96)
+local card3, val3 = infoCard(InfoRow, "⚡", "KEYBIND", "[T]",     192)
+
+-- ── Keybind hint row ────────────────────────────────────────
+local HintCard = Instance.new("Frame", Panel)
+HintCard.Size             = UDim2.new(1,-32,0,44)
+HintCard.Position         = UDim2.new(0,16,0,330)
+HintCard.BackgroundColor3 = Color3.fromRGB(20,20,36)
+HintCard.BorderSizePixel  = 0
+HintCard.ZIndex           = 11
+corner(HintCard, 10)
+stroke(HintCard, Color3.fromRGB(99,102,241), 1)
+
+local HintText = Instance.new("TextLabel", HintCard)
+HintText.Text             = "Press  [T]  to toggle  ·  Drag title to move"
+HintText.TextSize         = 11
+HintText.TextColor3       = THEME.SUBTEXT
+HintText.Font             = Enum.Font.Gotham
+HintText.BackgroundTransparency = 1
+HintText.Size             = UDim2.new(1,0,1,0)
+HintText.TextXAlignment   = Enum.TextXAlignment.Center
+HintText.ZIndex           = 12
+
+-- ── Footer ──────────────────────────────────────────────────
+local Footer = Instance.new("TextLabel", Panel)
+Footer.Text               = "RIVALS SUITE  v1.0"
+Footer.TextSize           = 10
+Footer.TextColor3         = THEME.SUBTEXT
+Footer.Font               = Enum.Font.Gotham
+Footer.BackgroundTransparency = 1
+Footer.Size               = UDim2.new(1,0,0,22)
+Footer.Position           = UDim2.new(0,0,1,-26)
+Footer.TextXAlignment     = Enum.TextXAlignment.Center
+Footer.ZIndex             = 11
+Footer.TextTransparency   = 0.5
+
+-- ══════════════════════════════════════════════════════════
+--  UPDATE UI STATE
+-- ══════════════════════════════════════════════════════════
+local function updateUI()
+    if alignEnabled then
+        -- status
+        StatusDot.BackgroundColor3 = THEME.ON
+        StatusLabel.TextColor3     = THEME.ON
+        StatusLabel.Text           = "ACTIVE"
+        StatusSub.Text             = "Aligning to camera each frame"
+        -- pill
+        tween(PillBg,   {BackgroundColor3 = THEME.ON},   0.2)
+        tween(PillKnob, {Position = UDim2.new(0,25,0.5,-10)}, 0.2)
+        -- toggle card border accent
+        tween(ToggleIcon, {TextColor3 = THEME.ON}, 0.2)
+    else
+        StatusDot.BackgroundColor3 = THEME.OFF
+        StatusLabel.TextColor3     = THEME.OFF
+        StatusLabel.Text           = "INACTIVE"
+        StatusSub.Text             = "Camera alignment is off"
+        tween(PillBg,   {BackgroundColor3 = THEME.OFF},  0.2)
+        tween(PillKnob, {Position = UDim2.new(0,3,0.5,-10)},  0.2)
+        tween(ToggleIcon, {TextColor3 = THEME.SUBTEXT}, 0.2)
+    end
+end
+
+-- ══════════════════════════════════════════════════════════
+--  OPEN / CLOSE PANEL
+-- ══════════════════════════════════════════════════════════
+local function openPanel()
+    guiOpen = true
+    Panel.Visible = true
+    Panel.Size    = UDim2.new(0, 320, 0, 10)
+    Panel.BackgroundTransparency = 1
+    tween(Panel, {Size = UDim2.new(0,320,0,420), BackgroundTransparency=0}, 0.3,
+          Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+    HubIcon.Text = "⊗"
+end
+
+local function closePanel()
+    guiOpen = false
+    tween(Panel, {Size = UDim2.new(0,320,0,10), BackgroundTransparency=1}, 0.22,
+          Enum.EasingStyle.Quart, Enum.EasingDirection.In)
+    task.delay(0.23, function() Panel.Visible = false end)
+    HubIcon.Text = "⊕"
+end
+
+-- ══════════════════════════════════════════════════════════
+--  TOGGLE ALIGNMENT
+-- ══════════════════════════════════════════════════════════
+local function toggleAlign()
+    alignEnabled = not alignEnabled
+    if alignEnabled then enableAlign() else disableAlign() end
+    updateUI()
+end
+
+-- ══════════════════════════════════════════════════════════
+--  DRAGGING  (mouse + touch)
+-- ══════════════════════════════════════════════════════════
+TitleBar.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+    or input.UserInputType == Enum.UserInputType.Touch then
+        dragging  = true
+        dragStart = input.Position
+        startPos  = Panel.Position
+    end
+end)
+
+TitleBar.InputChanged:Connect(function(input)
+    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+                  or input.UserInputType == Enum.UserInputType.Touch) then
+        local delta = input.Position - dragStart
+        Panel.Position = UDim2.new(
+            startPos.X.Scale, startPos.X.Offst + delta.X,
+            startPos.Y.Scale, startPos.Y.Offset + delta.Y
+        )
+    end
+end)
+
+TitleBar.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+    or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+    end
+end)
+
+-- ══════════════════════════════════════════════════════════
+--  BUTTON WIRING
+-- ══════════════════════════════════════════════════════════
+Hub.MouseButton1Click:Connect(function()
+    if guiOpen then closePanel() else openPanel() end
+end)
+Hub.TouchTap:Connect(function()
+    if guiOpen then closePanel() else openPanel() end
+end)
+
+CloseBtn.MouseButton1Click:Connect(closePanel)
+CloseBtn.TouchTap:Connect(closePanel)
+
+ToggleBtn.MouseButton1Click:Connect(toggleAlign)
+ToggleBtn.TouchTap:Connect(toggleAlign)
+
+-- hover effect on toggle btn
+ToggleBtn.MouseEnter:Connect(function()
+    tween(ToggleBtn, {BackgroundColor3 = Color3.fromRGB(28,28,46)}, 0.15)
+end)
+ToggleBtn.MouseLeave:Connect(function()
+    tween(ToggleBtn, {BackgroundColor3 = THEME.CARD}, 0.15)
+end)
+
+-- hover on close btn
+CloseBtn.MouseEnter:Connect(function()
+    tween(CloseBtn, {BackgroundColor3 = Color3.fromRGB(239,68,68), TextColor3 = Color3.fromRGB(255,255,255)}, 0.15)
+end)
+CloseBtn.MouseLeave:Connect(function()
+    tween(CloseBtn, {BackgroundColor3 = Color3.fromRGB(30,30,50), TextColor3 = THEME.SUBTEXT}, 0.15)
+end)
+
+-- ══════════════════════════════════════════════════════════
+--  KEYBOARD TOGGLE
+-- ══════════════════════════════════════════════════════════
+UserInputService.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if input.KeyCode == TOGGLE_KEY then toggleAlign() end
+end)
+
+-- ══════════════════════════════════════════════════════════
+--  RESPAWN RECONNECT
+-- ══════════════════════════════════════════════════════════
+LocalPlayer.CharacterAdded:Connect(function()
+    if alignEnabled then
+        task.wait(0.5)
+        if not connection then enableAlign() end
+    end
+end)
+
+-- ══════════════════════════════════════════════════════════
+--  INIT
+-- ══════════════════════════════════════════════════════════
+updateUI()
+print("[RIVALS] GUI loaded. Tap ⊕ (bottom-right) or press [T] to toggle.")
