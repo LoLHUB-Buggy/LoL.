@@ -1,0 +1,569 @@
+--[[
+    RIVALS RAGEBOT - FULL PACKAGE v3.0
+    GUI     : Sakading 1.12.1
+    Context : Roblox - Rivals (FPS)
+    Features: Perfect tracking | 100% hitchance | Triggerbot | Silent Aim | Rapid Fire | Mobile Support
+    Executor: Synapse X / KRNL / Fluxus / Delta (mobile) compatible
+    Author  : Jason's brody 😭
+--]]
+
+-- ============================================================
+--  SERVICES
+-- ============================================================
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService     = game:GetService("TweenService")
+local Workspace        = game:GetService("Workspace")
+local Camera           = Workspace.CurrentCamera
+
+local LocalPlayer      = Players.LocalPlayer
+local Mouse            = LocalPlayer:GetMouse()
+
+-- ============================================================
+--  PLATFORM DETECTION
+-- ============================================================
+local IsMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+
+-- ============================================================
+--  CONFIG
+-- ============================================================
+local CFG = {
+    AimbotEnabled      = true,
+    AimKey             = Enum.UserInputType.MouseButton2,
+    AimBone            = "Head",
+    SmoothFactor       = 1,
+    MaxDistance        = 1000,
+    TeamCheck          = true,
+
+    SilentAimEnabled   = true,
+    SilentAimBone      = "Head",
+
+    TriggerbotEnabled  = true,
+    TriggerbotDelay    = 0,
+    TriggerbotFOV      = 8,
+
+    RapidFireEnabled   = true,
+    RapidFireRate      = 0.02,
+}
+
+-- ============================================================
+--  UTILITY
+-- ============================================================
+local function getRoot(character)
+    return character and character:FindFirstChild("HumanoidRootPart")
+end
+
+local function getHumanoid(character)
+    return character and character:FindFirstChildOfClass("Humanoid")
+end
+
+local function isAlive(player)
+    local char = player.Character
+    if not char then return false end
+    local hum = getHumanoid(char)
+    return hum and hum.Health > 0
+end
+
+local function isEnemy(player)
+    if not CFG.TeamCheck then return true end
+    if player.Team == nil or LocalPlayer.Team == nil then return true end
+    return player.Team ~= LocalPlayer.Team
+end
+
+local function getBonePosition(player, boneName)
+    local char = player.Character
+    if not char then return nil end
+    local bone = char:FindFirstChild(boneName)
+    if bone then return bone.Position end
+    local root = getRoot(char)
+    return root and root.Position or nil
+end
+
+local function worldToViewport(pos)
+    local screenPos, onScreen = Camera:WorldToViewportPoint(pos)
+    return Vector2.new(screenPos.X, screenPos.Y), screenPos.Z, onScreen
+end
+
+local function screenDistance(screenPos)
+    local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    return (center - screenPos).Magnitude
+end
+
+-- ============================================================
+--  TARGET ACQUISITION
+-- ============================================================
+local function getClosestTarget()
+    local bestPlayer = nil
+    local bestDist   = math.huge
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        if not isEnemy(player) then continue end
+        if not isAlive(player) then continue end
+        local bonePos = getBonePosition(player, CFG.AimBone)
+        if not bonePos then continue end
+        local localRoot = getRoot(LocalPlayer.Character)
+        if localRoot then
+            if (bonePos - localRoot.Position).Magnitude > CFG.MaxDistance then continue end
+        end
+        local screenPos, depth, onScreen = worldToViewport(bonePos)
+        if not onScreen or depth < 0 then continue end
+        local dist = screenDistance(screenPos)
+        if dist < bestDist then
+            bestDist   = dist
+            bestPlayer = player
+        end
+    end
+    return bestPlayer, bestDist
+end
+
+-- ============================================================
+--  SILENT AIM
+-- ============================================================
+local OriginalIndex = nil
+local SilentTarget  = nil
+
+local function enableSilentAim()
+    local mt = getrawmetatable(Mouse)
+    OriginalIndex = mt.__index
+    setreadonly(mt, false)
+    mt.__index = function(self, key)
+        if CFG.SilentAimEnabled and SilentTarget then
+            local bonePos = getBonePosition(SilentTarget, CFG.SilentAimBone)
+            if bonePos then
+                if key == "Hit" then return CFrame.new(bonePos) end
+                if key == "UnitRay" then
+                    local camPos = Camera.CFrame.Position
+                    return Ray.new(camPos, (bonePos - camPos).Unit * 1000)
+                end
+            end
+        end
+        return OriginalIndex(self, key)
+    end
+    setreadonly(mt, true)
+end
+
+-- ============================================================
+--  AIMBOT
+-- ============================================================
+local MobileAiming = false
+
+local function isAimKeyHeld()
+    if IsMobile then return MobileAiming end
+    return UserInputService:IsMouseButtonPressed(CFG.AimKey)
+end
+
+local function runAimbot(target)
+    if not target then return end
+    local bonePos = getBonePosition(target, CFG.AimBone)
+    if not bonePos then return end
+    local camCF    = Camera.CFrame
+    local targetCF = CFrame.new(camCF.Position, bonePos)
+    if CFG.SmoothFactor <= 1 then
+        Camera.CFrame = targetCF
+    else
+        Camera.CFrame = camCF:Lerp(targetCF, 1 / CFG.SmoothFactor)
+    end
+end
+
+-- ============================================================
+--  TRIGGERBOT
+-- ============================================================
+local triggerDebounce = false
+
+local function simulateClick()
+    if mouse1click then mouse1click() end
+end
+
+local function runTriggerbot()
+    if triggerDebounce then return end
+    local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        if not isEnemy(player) then continue end
+        if not isAlive(player) then continue end
+        local bonePos = getBonePosition(player, CFG.AimBone)
+        if not bonePos then continue end
+        local screenPos, depth, onScreen = worldToViewport(bonePos)
+        if not onScreen or depth < 0 then continue end
+        if (center - screenPos).Magnitude <= CFG.TriggerbotFOV then
+            triggerDebounce = true
+            task.delay(CFG.TriggerbotDelay, function()
+                simulateClick()
+                task.wait(0.05)
+                triggerDebounce = false
+            end)
+            break
+        end
+    end
+end
+
+-- ============================================================
+--  RAPID FIRE
+-- ============================================================
+local RapidFireActive = false
+local RapidFireThread = nil
+
+local function startRapidFire()
+    if RapidFireThread then return end
+    RapidFireThread = task.spawn(function()
+        while CFG.RapidFireEnabled do
+            if RapidFireActive then
+                if mouse1click then mouse1click() end
+            end
+            task.wait(CFG.RapidFireRate)
+        end
+    end)
+end
+
+local function stopRapidFire()
+    if RapidFireThread then
+        task.cancel(RapidFireThread)
+        RapidFireThread = nil
+    end
+end
+
+UserInputService.InputBegan:Connect(function(input, gpe)
+    if gpe then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        RapidFireActive = true
+    end
+end)
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        RapidFireActive = false
+    end
+end)
+
+-- ============================================================
+--  SAKADING 1.12.1 — GUI
+-- ============================================================
+local function buildGUI()
+    local old = LocalPlayer.PlayerGui:FindFirstChild("Sakading")
+    if old then old:Destroy() end
+
+    -- ROOT
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name            = "Sakading"
+    ScreenGui.ResetOnSpawn    = false
+    ScreenGui.ZIndexBehavior  = Enum.ZIndexBehavior.Sibling
+    ScreenGui.DisplayOrder    = 99
+    ScreenGui.Parent          = LocalPlayer.PlayerGui
+
+    -- ── OPEN BUTTON (visible when GUI is closed) ──────────────
+    local OpenBtn = Instance.new("TextButton")
+    OpenBtn.Name              = "OpenButton"
+    OpenBtn.Size              = UDim2.new(0, 110, 0, 32)
+    OpenBtn.Position          = UDim2.new(0, 12, 0, 12)
+    OpenBtn.BackgroundColor3  = Color3.fromRGB(18, 18, 28)
+    OpenBtn.BorderSizePixel   = 0
+    OpenBtn.Text              = "☰ Sakading"
+    OpenBtn.TextColor3        = Color3.fromRGB(200, 160, 255)
+    OpenBtn.TextSize          = 13
+    OpenBtn.Font              = Enum.Font.GothamBold
+    OpenBtn.Visible           = false   -- hidden while main panel open
+    OpenBtn.Parent            = ScreenGui
+
+    local OpenCorner = Instance.new("UICorner")
+    OpenCorner.CornerRadius = UDim.new(0, 6)
+    OpenCorner.Parent       = OpenBtn
+
+    -- ── MAIN PANEL ────────────────────────────────────────────
+    local Panel = Instance.new("Frame")
+    Panel.Name              = "MainPanel"
+    Panel.Size              = UDim2.new(0, 280, 0, 310)
+    Panel.Position          = UDim2.new(0, 12, 0, 12)
+    Panel.BackgroundColor3  = Color3.fromRGB(12, 12, 20)
+    Panel.BorderSizePixel   = 0
+    Panel.ClipsDescendants  = true
+    Panel.Parent            = ScreenGui
+
+    local PanelCorner = Instance.new("UICorner")
+    PanelCorner.CornerRadius = UDim.new(0, 10)
+    PanelCorner.Parent       = Panel
+
+    -- subtle border stroke
+    local Stroke = Instance.new("UIStroke")
+    Stroke.Color     = Color3.fromRGB(120, 60, 220)
+    Stroke.Thickness = 1.5
+    Stroke.Parent    = Panel
+
+    -- ── TITLE BAR ─────────────────────────────────────────────
+    local TitleBar = Instance.new("Frame")
+    TitleBar.Name             = "TitleBar"
+    TitleBar.Size             = UDim2.new(1, 0, 0, 38)
+    TitleBar.BackgroundColor3 = Color3.fromRGB(22, 12, 40)
+    TitleBar.BorderSizePixel  = 0
+    TitleBar.Parent           = Panel
+
+    local TitleCorner = Instance.new("UICorner")
+    TitleCorner.CornerRadius = UDim.new(0, 10)
+    TitleCorner.Parent       = TitleBar
+
+    -- fix bottom corners of titlebar
+    local TitleFix = Instance.new("Frame")
+    TitleFix.Size             = UDim2.new(1, 0, 0, 10)
+    TitleFix.Position         = UDim2.new(0, 0, 1, -10)
+    TitleFix.BackgroundColor3 = Color3.fromRGB(22, 12, 40)
+    TitleFix.BorderSizePixel  = 0
+    TitleFix.Parent           = TitleBar
+
+    local TitleLabel = Instance.new("TextLabel")
+    TitleLabel.Size            = UDim2.new(1, -40, 1, 0)
+    TitleLabel.Position        = UDim2.new(0, 12, 0, 0)
+    TitleLabel.BackgroundTransparency = 1
+    TitleLabel.Text            = "⚡ Sakading 1.12.1"
+    TitleLabel.TextColor3      = Color3.fromRGB(210, 170, 255)
+    TitleLabel.TextSize        = 14
+    TitleLabel.Font            = Enum.Font.GothamBold
+    TitleLabel.TextXAlignment  = Enum.TextXAlignment.Left
+    TitleLabel.Parent          = TitleBar
+
+    -- CLOSE BUTTON
+    local CloseBtn = Instance.new("TextButton")
+    CloseBtn.Name             = "CloseButton"
+    CloseBtn.Size             = UDim2.new(0, 28, 0, 28)
+    CloseBtn.Position         = UDim2.new(1, -34, 0, 5)
+    CloseBtn.BackgroundColor3 = Color3.fromRGB(180, 30, 60)
+    CloseBtn.BorderSizePixel  = 0
+    CloseBtn.Text             = "✕"
+    CloseBtn.TextColor3       = Color3.fromRGB(255, 255, 255)
+    CloseBtn.TextSize         = 13
+    CloseBtn.Font             = Enum.Font.GothamBold
+    CloseBtn.Parent           = TitleBar
+
+    local CloseCorner = Instance.new("UICorner")
+    CloseCorner.CornerRadius = UDim.new(0, 6)
+    CloseCorner.Parent       = CloseBtn
+
+    -- ── DRAGGABLE PANEL ───────────────────────────────────────
+    do
+        local dragging, dragStart, startPos
+        TitleBar.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+                dragging  = true
+                dragStart = input.Position
+                startPos  = Panel.Position
+            end
+        end)
+        UserInputService.InputChanged:Connect(function(input)
+            if dragging and (
+                input.UserInputType == Enum.UserInputType.MouseMovement or
+                input.UserInputType == Enum.UserInputType.Touch
+            ) then
+                local delta = input.Position - dragStart
+                Panel.Position = UDim2.new(
+                    startPos.X.Scale,
+                    startPos.X.Offset + delta.X,
+                    startPos.Y.Scale,
+                    startPos.Y.Offset + delta.Y
+                )
+            end
+        end)
+        UserInputService.InputEnded:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = false
+            end
+        end)
+    end
+
+    -- ── TOGGLE ROW BUILDER ────────────────────────────────────
+    local yOffset = 46  -- starts below title bar
+
+    local function addToggle(labelText, state, onToggle)
+        local Row = Instance.new("Frame")
+        Row.Size             = UDim2.new(1, -20, 0, 36)
+        Row.Position         = UDim2.new(0, 10, 0, yOffset)
+        Row.BackgroundColor3 = Color3.fromRGB(20, 20, 32)
+        Row.BorderSizePixel  = 0
+        Row.Parent           = Panel
+
+        local RowCorner = Instance.new("UICorner")
+        RowCorner.CornerRadius = UDim.new(0, 7)
+        RowCorner.Parent       = Row
+
+        local Label = Instance.new("TextLabel")
+        Label.Size             = UDim2.new(1, -60, 1, 0)
+        Label.Position         = UDim2.new(0, 10, 0, 0)
+        Label.BackgroundTransparency = 1
+        Label.Text             = labelText
+        Label.TextColor3       = Color3.fromRGB(220, 210, 240)
+        Label.TextSize         = 13
+        Label.Font             = Enum.Font.Gotham
+        Label.TextXAlignment   = Enum.TextXAlignment.Left
+        Label.Parent           = Row
+
+        -- pill toggle
+        local PillBG = Instance.new("Frame")
+        PillBG.Size             = UDim2.new(0, 44, 0, 22)
+        PillBG.Position         = UDim2.new(1, -52, 0.5, -11)
+        PillBG.BackgroundColor3 = state
+            and Color3.fromRGB(120, 60, 220)
+            or  Color3.fromRGB(50, 50, 70)
+        PillBG.BorderSizePixel  = 0
+        PillBG.Parent           = Row
+
+        local PillCorner = Instance.new("UICorner")
+        PillCorner.CornerRadius = UDim.new(1, 0)
+        PillCorner.Parent       = PillBG
+
+        local Knob = Instance.new("Frame")
+        Knob.Size             = UDim2.new(0, 16, 0, 16)
+        Knob.Position         = state
+            and UDim2.new(1, -19, 0.5, -8)
+            or  UDim2.new(0, 3, 0.5, -8)
+        Knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        Knob.BorderSizePixel  = 0
+        Knob.Parent           = PillBG
+
+        local KnobCorner = Instance.new("UICorner")
+        KnobCorner.CornerRadius = UDim.new(1, 0)
+        KnobCorner.Parent       = Knob
+
+        -- click on the whole row
+        local ClickZone = Instance.new("TextButton")
+        ClickZone.Size                  = UDim2.new(1, 0, 1, 0)
+        ClickZone.BackgroundTransparency= 1
+        ClickZone.Text                  = ""
+        ClickZone.Parent                = Row
+
+        local currentState = state
+        ClickZone.MouseButton1Click:Connect(function()
+            currentState = not currentState
+            onToggle(currentState)
+
+            -- animate pill
+            TweenService:Create(PillBG, TweenInfo.new(0.15), {
+                BackgroundColor3 = currentState
+                    and Color3.fromRGB(120, 60, 220)
+                    or  Color3.fromRGB(50, 50, 70)
+            }):Play()
+            TweenService:Create(Knob, TweenInfo.new(0.15), {
+                Position = currentState
+                    and UDim2.new(1, -19, 0.5, -8)
+                    or  UDim2.new(0, 3, 0.5, -8)
+            }):Play()
+        end)
+
+        yOffset = yOffset + 42
+    end
+
+    -- ── TOGGLES ───────────────────────────────────────────────
+    addToggle("🎯  Aimbot",      CFG.AimbotEnabled,     function(v) CFG.AimbotEnabled     = v end)
+    addToggle("👻  Silent Aim",  CFG.SilentAimEnabled,  function(v) CFG.SilentAimEnabled  = v end)
+    addToggle("🔫  Triggerbot",  CFG.TriggerbotEnabled, function(v) CFG.TriggerbotEnabled = v end)
+    addToggle("⚡  Rapid Fire",  CFG.RapidFireEnabled,  function(v)
+        CFG.RapidFireEnabled = v
+        if v then startRapidFire() else stopRapidFire() end
+    end)
+    addToggle("👥  Team Check",  CFG.TeamCheck,         function(v) CFG.TeamCheck         = v end)
+
+    -- Mobile AIM button (only on mobile)
+    if IsMobile then
+        local AimBtn = Instance.new("TextButton")
+        AimBtn.Size              = UDim2.new(0, 75, 0, 75)
+        AimBtn.Position          = UDim2.new(1, -100, 1, -190)
+        AimBtn.AnchorPoint       = Vector2.new(0.5, 0.5)
+        AimBtn.BackgroundColor3  = Color3.fromRGB(120, 40, 220)
+        AimBtn.BackgroundTransparency = 0.2
+        AimBtn.Text              = "AIM"
+        AimBtn.TextColor3        = Color3.fromRGB(255, 255, 255)
+        AimBtn.TextSize          = 17
+        AimBtn.Font              = Enum.Font.GothamBold
+        AimBtn.BorderSizePixel   = 0
+        AimBtn.Parent            = ScreenGui
+
+        local AimCorner = Instance.new("UICorner")
+        AimCorner.CornerRadius = UDim.new(1, 0)
+        AimCorner.Parent       = AimBtn
+
+        AimBtn.MouseButton1Down:Connect(function()
+            MobileAiming    = true
+            RapidFireActive = true
+            AimBtn.BackgroundColor3 = Color3.fromRGB(160, 60, 255)
+        end)
+        AimBtn.MouseButton1Up:Connect(function()
+            MobileAiming    = false
+            RapidFireActive = false
+            AimBtn.BackgroundColor3 = Color3.fromRGB(120, 40, 220)
+        end)
+    end
+
+    -- ── FOOTER ────────────────────────────────────────────────
+    local Footer = Instance.new("TextLabel")
+    Footer.Size                  = UDim2.new(1, 0, 0, 18)
+    Footer.Position              = UDim2.new(0, 0, 1, -20)
+    Footer.BackgroundTransparency= 1
+    Footer.Text                  = "Sakading 1.12.1  •  by Jason's brody 😭"
+    Footer.TextColor3            = Color3.fromRGB(90, 70, 130)
+    Footer.TextSize              = 10
+    Footer.Font                  = Enum.Font.Gotham
+    Footer.Parent                = Panel
+
+    -- ── OPEN / CLOSE LOGIC ────────────────────────────────────
+    local function closePanel()
+        TweenService:Create(Panel, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {
+            Size = UDim2.new(0, 280, 0, 0)
+        }):Play()
+        task.delay(0.21, function()
+            Panel.Visible   = false
+            OpenBtn.Visible = true
+        end)
+    end
+
+    local function openPanel()
+        Panel.Visible   = true
+        OpenBtn.Visible = false
+        Panel.Size      = UDim2.new(0, 280, 0, 0)
+        TweenService:Create(Panel, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {
+            Size = UDim2.new(0, 280, 0, 310)
+        }):Play()
+    end
+
+    CloseBtn.MouseButton1Click:Connect(closePanel)
+    OpenBtn.MouseButton1Click:Connect(openPanel)
+
+    -- PC keybind: Insert = toggle panel
+    if not IsMobile then
+        UserInputService.InputBegan:Connect(function(input, gpe)
+            if gpe then return end
+            if input.KeyCode == Enum.KeyCode.Insert then
+                if Panel.Visible then closePanel() else openPanel() end
+            end
+        end)
+    end
+
+    print("[Sakading 1.12.1] GUI loaded 😭✌️ | INSERT to toggle on PC")
+end
+
+-- ============================================================
+--  INIT
+-- ============================================================
+enableSilentAim()
+startRapidFire()
+buildGUI()
+
+-- ============================================================
+--  MAIN LOOP
+-- ============================================================
+RunService.RenderStepped:Connect(function()
+    local localChar = LocalPlayer.Character
+    if not localChar then return end
+    if not isAlive(LocalPlayer) then return end
+
+    local target = getClosestTarget()
+    SilentTarget = target
+
+    if CFG.AimbotEnabled and isAimKeyHeld() then runAimbot(target) end
+    if CFG.TriggerbotEnabled then runTriggerbot() end
+end)
+
+LocalPlayer.CharacterRemoving:Connect(function()
+    SilentTarget    = nil
+    MobileAiming    = false
+    RapidFireActive = false
+end)
+
+print("[Sakading 1.12.1] Fully loaded 💀✌️")
