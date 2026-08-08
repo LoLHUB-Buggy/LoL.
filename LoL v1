@@ -1,0 +1,849 @@
+--[[
+    ╔══════════════════════════════════════════════════════════════════╗
+    ║         LoL Hub — JASON'S EDITION  v3.0 MOBILE            ║
+    ║   Game    : Rivals (Roblox FPS)                                 ║
+    ║   Engine  : Roblox Luau — Client-side executor                  ║
+    ║   Exec    : Arceus X / Delta / Hydrogen / Fluxus Mobile         ║
+    ║   GUI     : Unnamed Enhancements style — MOBILE OPTIMIZED       ║
+    ║   Input   : Full touch support — drag, tap, swipe sliders       ║
+    ║   Modules : ESP · Aimbot · Silent Aim · No Recoil              ║
+    ║             Speed · BHop · Infinite Ammo · No Spread           ║
+    ║             Config Save/Load · On-screen aim button             ║
+    ╚══════════════════════════════════════════════════════════════════╝
+--]]
+
+-- ══════════════════════════════════════════════
+--  SHOOT REMOTE — update after running scanner
+-- ══════════════════════════════════════════════
+local SHOOT_REMOTE = "ShootEvent"
+
+-- ══════════════════════════════════════════════
+--  SERVICES
+-- ══════════════════════════════════════════════
+local RunService        = game:GetService("RunService")
+local Players           = game:GetService("Players")
+local UserInputService  = game:GetService("UserInputService")
+local TweenService      = game:GetService("TweenService")
+local CoreGui           = game:GetService("CoreGui")
+local HttpService       = game:GetService("HttpService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera      = workspace.CurrentCamera
+
+-- ══════════════════════════════════════════════
+--  MOBILE DETECTION
+-- ══════════════════════════════════════════════
+local IsMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+
+-- ══════════════════════════════════════════════
+--  VIEWPORT SCALE HELPER
+--  Returns a pixel value scaled to screen size
+--  so the GUI looks right on any phone resolution
+-- ══════════════════════════════════════════════
+local function vp() return Camera.ViewportSize end
+local function scaled(px)
+    -- base design width = 390 (iPhone 14 logical)
+    local ratio = math.clamp(vp().X / 390, 0.7, 1.4)
+    return math.floor(px * ratio)
+end
+
+-- ══════════════════════════════════════════════
+--  CFG
+-- ══════════════════════════════════════════════
+local CFG = {
+    ESP_ENABLED     = true,
+    ESP_BOX         = true,
+    ESP_NAME        = true,
+    ESP_HEALTH      = true,
+    ESP_DISTANCE    = true,
+    ESP_TRACERS     = false,
+    ESP_MAX_DIST    = 1500,
+    ESP_ENEMY_R     = 255, ESP_ENEMY_G = 60,  ESP_ENEMY_B = 60,
+    ESP_TEAM_R      = 60,  ESP_TEAM_G  = 255, ESP_TEAM_B  = 120,
+
+    AIM_ENABLED     = true,
+    AIM_SILENT      = true,
+    AIM_DRAW_FOV    = false,   -- off by default on mobile (screen clutter)
+    AIM_TEAM_CHECK  = true,
+    AIM_FOV         = 180,    -- wider default on mobile (no mouse precision)
+    AIM_SMOOTH      = 22,
+
+    NORECOIL        = true,
+    NO_SPREAD       = true,
+    INFINITE_AMMO   = true,
+
+    SPEED_ENABLED   = false,
+    SPEED_VALUE     = 28,
+    BHOP_ENABLED    = false,
+
+    CONFIG_NAME     = "default",
+    AUTOLOAD        = "",
+}
+
+-- ══════════════════════════════════════════════
+--  PALETTE
+-- ══════════════════════════════════════════════
+local function c3(r,g,b) return Color3.fromRGB(r,g,b) end
+
+local P = {
+    BG      = c3(13,  13,  18 ),
+    MAIN    = c3(20,  20,  28 ),
+    PANEL   = c3(26,  26,  36 ),
+    OUTLINE = c3(40,  40,  55 ),
+    ACCENT  = c3(80,  100, 255),
+    TEXT    = c3(220, 220, 230),
+    SUB     = c3(130, 130, 150),
+    ON      = c3(60,  220, 80 ),
+    OFF     = c3(55,  55,  68 ),
+    RED     = c3(220, 60,  60 ),
+    WHITE   = c3(255, 255, 255),
+}
+
+-- ══════════════════════════════════════════════
+--  UTILITY
+-- ══════════════════════════════════════════════
+local function w2s(pos)
+    local s, vis = Camera:WorldToViewportPoint(pos)
+    return Vector2.new(s.X, s.Y), vis, s.Z
+end
+local function getChar(p)   return p and p.Character end
+local function getRoot(c)   return c and c:FindFirstChild("HumanoidRootPart") end
+local function getHum(c)    return c and c:FindFirstChildOfClass("Humanoid") end
+local function getBone(c,b) return c and (c:FindFirstChild(b) or getRoot(c)) end
+local function alive(p)
+    local c = getChar(p); local h = c and getHum(c)
+    return h and h.Health > 0
+end
+local function teammate(p)
+    return CFG.AIM_TEAM_CHECK and p.Team == LocalPlayer.Team
+end
+local function dist3(a,b) return (a-b).Magnitude end
+
+local function charBounds(char)
+    local sx, sy = {}, {}
+    for _, p in ipairs(char:GetDescendants()) do
+        if p:IsA("BasePart") then
+            local cf, sz = p.CFrame, p.Size/2
+            for x=-1,1,2 do for y=-1,1,2 do for z=-1,1,2 do
+                local sc, vis = w2s(cf * Vector3.new(x*sz.X,y*sz.Y,z*sz.Z))
+                if vis then sx[#sx+1]=sc.X; sy[#sy+1]=sc.Y end
+            end end end
+        end
+    end
+    if #sx==0 then return nil end
+    local mnX,mxX,mnY,mxY = math.huge,-math.huge,math.huge,-math.huge
+    for i=1,#sx do
+        mnX=math.min(mnX,sx[i]); mxX=math.max(mxX,sx[i])
+        mnY=math.min(mnY,sy[i]); mxY=math.max(mxY,sy[i])
+    end
+    return mnX, mnY, mxX-mnX, mxY-mnY
+end
+
+-- ══════════════════════════════════════════════
+--  DRAWING
+-- ══════════════════════════════════════════════
+local drawings = {}
+local function D(t, props)
+    local d = Drawing.new(t)
+    for k,v in pairs(props) do d[k]=v end
+    drawings[#drawings+1]=d
+    return d
+end
+
+-- ══════════════════════════════════════════════
+--  ESP
+-- ══════════════════════════════════════════════
+local espCache = {}
+
+local function makeESP(player)
+    local obj = {
+        box   = {},
+        name  = D("Text", {Size=13,Color=P.TEXT,   Outline=true,Center=true, Visible=false}),
+        hpBg  = D("Line", {Thickness=4,Color=c3(20,20,20),                   Visible=false}),
+        hpFg  = D("Line", {Thickness=3,Color=P.ON,                           Visible=false}),
+        dist  = D("Text", {Size=11,Color=P.SUB,    Outline=true,Center=true, Visible=false}),
+        trace = D("Line", {Thickness=1,Color=P.RED,                          Visible=false}),
+    }
+    for i=1,4 do obj.box[i]=D("Line",{Thickness=1.2,Color=P.RED,Visible=false}) end
+    espCache[player]=obj
+end
+
+local function killESP(player)
+    local o=espCache[player]; if not o then return end
+    for _,l in ipairs(o.box) do l:Remove() end
+    o.name:Remove();o.hpBg:Remove();o.hpFg:Remove();o.dist:Remove();o.trace:Remove()
+    espCache[player]=nil
+end
+
+local function updateESP()
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player==LocalPlayer then continue end
+        if not espCache[player] then makeESP(player) end
+        local o    = espCache[player]
+        local char = getChar(player)
+        local root = getRoot(char)
+        local hum  = getHum(char)
+        local show = CFG.ESP_ENABLED and root and hum and hum.Health>0
+                     and dist3(root.Position,Camera.CFrame.Position)<=CFG.ESP_MAX_DIST
+        if not show then
+            for _,l in ipairs(o.box) do l.Visible=false end
+            o.name.Visible=false;o.hpBg.Visible=false
+            o.hpFg.Visible=false;o.dist.Visible=false;o.trace.Visible=false
+            continue
+        end
+        local col = teammate(player)
+            and c3(CFG.ESP_TEAM_R,CFG.ESP_TEAM_G,CFG.ESP_TEAM_B)
+            or  c3(CFG.ESP_ENEMY_R,CFG.ESP_ENEMY_G,CFG.ESP_ENEMY_B)
+        local bx,by,bw,bh = charBounds(char)
+        if not bx then for _,l in ipairs(o.box) do l.Visible=false end continue end
+        if CFG.ESP_BOX then
+            local pts = {
+                {Vector2.new(bx,by),    Vector2.new(bx+bw,by)   },
+                {Vector2.new(bx,by+bh), Vector2.new(bx+bw,by+bh)},
+                {Vector2.new(bx,by),    Vector2.new(bx,by+bh)   },
+                {Vector2.new(bx+bw,by), Vector2.new(bx+bw,by+bh)},
+            }
+            for i,ln in ipairs(o.box) do ln.From=pts[i][1];ln.To=pts[i][2];ln.Color=col;ln.Visible=true end
+        else for _,l in ipairs(o.box) do l.Visible=false end end
+        o.name.Text=player.DisplayName; o.name.Position=Vector2.new(bx+bw/2,by-16); o.name.Visible=CFG.ESP_NAME
+        local hp=math.clamp(hum.Health/hum.MaxHealth,0,1)
+        o.hpBg.From=Vector2.new(bx-6,by);   o.hpBg.To=Vector2.new(bx-6,by+bh)
+        o.hpFg.From=Vector2.new(bx-6,by+bh);o.hpFg.To=Vector2.new(bx-6,by+bh-bh*hp)
+        o.hpFg.Color=Color3.fromRGB(math.floor(255*(1-hp)),math.floor(255*hp),0)
+        o.hpBg.Visible=CFG.ESP_HEALTH;o.hpFg.Visible=CFG.ESP_HEALTH
+        local d=math.floor(dist3(root.Position,Camera.CFrame.Position))
+        o.dist.Text="["..d.."]"; o.dist.Position=Vector2.new(bx+bw/2,by+bh+2); o.dist.Visible=CFG.ESP_DISTANCE
+        local vps=Camera.ViewportSize
+        o.trace.From=Vector2.new(vps.X/2,vps.Y); o.trace.To=Vector2.new(bx+bw/2,by+bh)
+        o.trace.Color=col; o.trace.Visible=CFG.ESP_TRACERS
+    end
+end
+
+-- ══════════════════════════════════════════════
+--  AIMBOT + SILENT AIM
+-- ══════════════════════════════════════════════
+local fovCircle = D("Circle",{Thickness=1,Color=P.WHITE,Filled=false,NumSides=64,Visible=false})
+local silentTarget = nil
+local aimActive    = false   -- controlled by on-screen AIM button on mobile
+
+local function nearestTarget()
+    local vps = Camera.ViewportSize
+    local mid = Vector2.new(vps.X/2, vps.Y/2)
+    local best, bestD = nil, CFG.AIM_FOV
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p==LocalPlayer or teammate(p) or not alive(p) then continue end
+        local bone=getBone(getChar(p),"Head"); if not bone then continue end
+        local sc,vis=w2s(bone.Position)
+        if vis then
+            local d=(mid-sc).Magnitude
+            if d<bestD then bestD=d; best=bone end
+        end
+    end
+    return best
+end
+
+local function hookSilentAim()
+    local remote=ReplicatedStorage:FindFirstChild(SHOOT_REMOTE,true)
+    if not remote then
+        warn("[LoL Hub] Remote '"..SHOOT_REMOTE.."' not found. Run misc scanner.")
+        return
+    end
+    if not hookfunction then
+        warn("[LoL Hub] hookfunction unavailable in this executor")
+        return
+    end
+    local orig=remote.FireServer
+    hookfunction(orig, function(self,...)
+        if not CFG.AIM_SILENT or not CFG.AIM_ENABLED then return orig(self,...) end
+        local t=silentTarget; if not t then return orig(self,...) end
+        local args={...}
+        local dir=(t.Position-Camera.CFrame.Position).Unit
+        if args[1] and typeof(args[1])=="Vector3" then args[1]=dir
+        elseif args[2] and typeof(args[2])=="Vector3" then args[2]=dir end
+        return orig(self,table.unpack(args))
+    end)
+    print("[LoL Hub] Silent aim hooked: "..remote:GetFullName())
+end
+
+local function updateAimbot()
+    local vps=Camera.ViewportSize; local mid=Vector2.new(vps.X/2,vps.Y/2)
+    fovCircle.Position=mid; fovCircle.Radius=CFG.AIM_FOV
+    fovCircle.Visible=CFG.AIM_DRAW_FOV and CFG.AIM_ENABLED
+    silentTarget=nil
+    if not CFG.AIM_ENABLED then return end
+    local target=nearestTarget(); silentTarget=target
+    if not target then return end
+    if CFG.AIM_SILENT then return end
+    -- smooth cam (non-silent, triggered by aimActive flag on mobile)
+    if aimActive then
+        local smooth=CFG.AIM_SMOOTH/100
+        Camera.CFrame=Camera.CFrame:Lerp(CFrame.lookAt(Camera.CFrame.Position,target.Position),smooth)
+    end
+end
+
+-- ══════════════════════════════════════════════
+--  MOVEMENT + COMBAT
+-- ══════════════════════════════════════════════
+local lastCamCF=Camera.CFrame
+RunService.RenderStepped:Connect(function()
+    if CFG.NORECOIL then
+        local cur=Camera.CFrame
+        local ax=cur:ToObjectSpace(lastCamCF):ToEulerAnglesXYZ()
+        if ax>0.001 then Camera.CFrame=Camera.CFrame*CFrame.Angles(-ax*0.9,0,0) end
+    end
+    lastCamCF=Camera.CFrame
+    updateESP()
+    updateAimbot()
+end)
+
+RunService.Heartbeat:Connect(function()
+    local char=getChar(LocalPlayer); local hum=char and getHum(char); local root=char and getRoot(char)
+    if not hum or not root then return end
+    if CFG.SPEED_ENABLED then hum.WalkSpeed=CFG.SPEED_VALUE end
+    if CFG.BHOP_ENABLED and UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+        if not root:FindFirstChildOfClass("BodyVelocity") then
+            local bv=Instance.new("BodyVelocity")
+            bv.Velocity=Vector3.new(root.Velocity.X,52,root.Velocity.Z)
+            bv.MaxForce=Vector3.new(0,math.huge,0); bv.P=math.huge; bv.Parent=root
+            game:GetService("Debris"):AddItem(bv,0.09)
+        end
+    end
+    local tool=char:FindFirstChildOfClass("Tool")
+    if tool then
+        for _,v in ipairs(tool:GetDescendants()) do
+            if CFG.INFINITE_AMMO and v:IsA("NumberValue") and v.Name:lower():match("ammo") then v.Value=9999 end
+            if CFG.NO_SPREAD    and v:IsA("NumberValue") and v.Name:lower():match("spread") then v.Value=0 end
+        end
+    end
+end)
+
+-- ══════════════════════════════════════════════
+--  CONFIG I/O
+-- ══════════════════════════════════════════════
+local CFGDIR="lolhub_configs/"
+local function ensureDir() if not isfolder(CFGDIR) then makefolder(CFGDIR) end end
+local function saveConfig(n) ensureDir(); local ok,s=pcall(HttpService.JSONEncode,HttpService,CFG); if ok then writefile(CFGDIR..n..".json",s) end end
+local function loadConfig(n) ensureDir(); local p=CFGDIR..n..".json"; if isfile(p) then local ok,t=pcall(HttpService.JSONDecode,HttpService,readfile(p)); if ok and type(t)=="table" then for k,v in pairs(t) do CFG[k]=v end end end end
+local function listConfigs() ensureDir(); local out={}; for _,f in ipairs(listfiles(CFGDIR)) do local n=f:match("([^/\\]+)%.json$"); if n then out[#out+1]=n end end return out end
+if CFG.AUTOLOAD~="" then pcall(loadConfig,CFG.AUTOLOAD) end
+
+-- ══════════════════════════════════════════════
+--  GUI
+-- ══════════════════════════════════════════════
+if CoreGui:FindFirstChild("_LoLHubGUI") then CoreGui:FindFirstChild("_LoLHubGUI"):Destroy() end
+
+local Screen=Instance.new("ScreenGui")
+Screen.Name="._LoLHubGUI"; Screen.ResetOnSpawn=false
+Screen.ZIndexBehavior=Enum.ZIndexBehavior.Sibling
+Screen.IgnoreGuiInset=true    -- fills whole screen inc notch area
+Screen.Parent=CoreGui
+
+-- ── WINDOW SIZE — adaptive to screen ─────────
+-- Mobile: 90% of screen width, capped at 380px
+-- Desktop: fixed 500px
+local WIN_W = IsMobile and math.min(math.floor(vp().X*0.9), 380) or 500
+local WIN_H = IsMobile and math.min(math.floor(vp().Y*0.75),420) or 420
+local TAB_H   = IsMobile and 36 or 28   -- fatter tabs on mobile
+local TITLE_H = IsMobile and 42 or 34   -- fatter title bar
+local ROW_H   = IsMobile and 38 or 30   -- taller rows for fat fingers
+local SLD_H   = IsMobile and 52 or 44
+local TXT_SZ  = IsMobile and 14 or 12
+local TAB_TXT = IsMobile and 12 or 12
+
+-- ── OPEN BUTTON ───────────────────────────────
+local OpenBtn=Instance.new("TextButton")
+OpenBtn.Text="▶ LoL Hub"
+OpenBtn.Size=UDim2.new(0, IsMobile and 82 or 90, 0, IsMobile and 34 or 24)
+OpenBtn.Position=UDim2.new(0,10, IsMobile and 0.15 or 0.5, IsMobile and 0 or -12)
+OpenBtn.BackgroundColor3=P.ACCENT; OpenBtn.TextColor3=P.WHITE
+OpenBtn.TextSize=IsMobile and 13 or 11; OpenBtn.Font=Enum.Font.GothamBold
+OpenBtn.BorderSizePixel=0; OpenBtn.ZIndex=10; OpenBtn.Parent=Screen
+do local c=Instance.new("UICorner") c.CornerRadius=UDim.new(0,6) c.Parent=OpenBtn end
+
+-- ── MAIN WINDOW ───────────────────────────────
+local Win=Instance.new("Frame")
+Win.Name="Window"
+Win.Size=UDim2.new(0,WIN_W,0,WIN_H)
+Win.Position=UDim2.new(0.5,-WIN_W/2,0.5,-WIN_H/2)
+Win.BackgroundColor3=P.BG; Win.BorderSizePixel=0
+Win.Parent=Screen
+do local c=Instance.new("UICorner") c.CornerRadius=UDim.new(0,8) c.Parent=Win end
+do local s=Instance.new("UIStroke") s.Color=P.OUTLINE s.Thickness=1.2 s.Parent=Win end
+
+-- ── MOBILE DRAG (touch-based, replaces Draggable) ─
+do
+    local dragging,dragStart,startPos=false,nil,nil
+    Win.InputBegan:Connect(function(inp)
+        if inp.UserInputType==Enum.UserInputType.Touch
+        or inp.UserInputType==Enum.UserInputType.MouseButton1 then
+            dragging=true
+            dragStart=inp.Position
+            startPos=Win.Position
+        end
+    end)
+    Win.InputEnded:Connect(function(inp)
+        if inp.UserInputType==Enum.UserInputType.Touch
+        or inp.UserInputType==Enum.UserInputType.MouseButton1 then
+            dragging=false
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(inp)
+        if not dragging then return end
+        if inp.UserInputType==Enum.UserInputType.Touch
+        or inp.UserInputType==Enum.UserInputType.MouseMovement then
+            local delta=inp.Position-dragStart
+            Win.Position=UDim2.new(
+                startPos.X.Scale, startPos.X.Offset+delta.X,
+                startPos.Y.Scale, startPos.Y.Offset+delta.Y
+            )
+        end
+    end)
+end
+
+-- ── TITLE BAR ────────────────────────────────
+local TBar=Instance.new("Frame")
+TBar.Size=UDim2.new(1,0,0,TITLE_H); TBar.BackgroundColor3=P.MAIN; TBar.BorderSizePixel=0; TBar.Parent=Win
+do local c=Instance.new("UICorner") c.CornerRadius=UDim.new(0,8) c.Parent=TBar end
+do local f=Instance.new("Frame"); f.Size=UDim2.new(1,0,0,8); f.Position=UDim2.new(0,0,1,-8); f.BackgroundColor3=P.MAIN; f.BorderSizePixel=0; f.Parent=TBar end
+
+local TTitle=Instance.new("TextLabel")
+TTitle.Text="LoL Hub  ·  Jason's Edition"
+TTitle.Size=UDim2.new(1,-80,1,0); TTitle.Position=UDim2.new(0,12,0,0)
+TTitle.BackgroundTransparency=1; TTitle.TextColor3=P.TEXT
+TTitle.TextSize=IsMobile and 13 or 13; TTitle.Font=Enum.Font.GothamMedium
+TTitle.TextXAlignment=Enum.TextXAlignment.Left; TTitle.Parent=TBar
+
+-- Close button — big on mobile
+local CloseBtn=Instance.new("TextButton")
+CloseBtn.Text="✕"
+CloseBtn.Size=UDim2.new(0, IsMobile and 34 or 26, 0, IsMobile and 28 or 20)
+CloseBtn.Position=UDim2.new(1, IsMobile and -40 or -32, 0.5, IsMobile and -14 or -10)
+CloseBtn.BackgroundColor3=P.RED; CloseBtn.TextColor3=P.WHITE
+CloseBtn.TextSize=12; CloseBtn.Font=Enum.Font.GothamBold
+CloseBtn.BorderSizePixel=0; CloseBtn.Parent=TBar
+do local c=Instance.new("UICorner") c.CornerRadius=UDim.new(0,5) c.Parent=CloseBtn end
+
+-- Minimize
+local MinBtn=Instance.new("TextButton")
+MinBtn.Text="─"
+MinBtn.Size=UDim2.new(0, IsMobile and 34 or 26, 0, IsMobile and 28 or 20)
+MinBtn.Position=UDim2.new(1, IsMobile and -80 or -62, 0.5, IsMobile and -14 or -10)
+MinBtn.BackgroundColor3=c3(60,60,80); MinBtn.TextColor3=P.WHITE
+MinBtn.TextSize=12; MinBtn.Font=Enum.Font.GothamBold
+MinBtn.BorderSizePixel=0; MinBtn.Parent=TBar
+do local c=Instance.new("UICorner") c.CornerRadius=UDim.new(0,5) c.Parent=MinBtn end
+
+local winOpen=true
+local function setWin(v)
+    winOpen=v; Win.Visible=v; OpenBtn.Visible=not v
+end
+setWin(true)
+
+CloseBtn.MouseButton1Click:Connect(function() setWin(false) end)
+OpenBtn.MouseButton1Click:Connect(function()  setWin(true)  end)
+
+local bodyVisible=true
+MinBtn.MouseButton1Click:Connect(function()
+    bodyVisible=not bodyVisible
+    local body=Win:FindFirstChild("Body")
+    if body then body.Visible=bodyVisible end
+    -- shrink/expand window height
+    TweenService:Create(Win,TweenInfo.new(0.15),{
+        Size=bodyVisible
+            and UDim2.new(0,WIN_W,0,WIN_H)
+            or  UDim2.new(0,WIN_W,0,TITLE_H+TAB_H+4)
+    }):Play()
+end)
+
+-- ── TAB BAR ───────────────────────────────────
+local TabBar=Instance.new("Frame")
+TabBar.Name="TabBar"; TabBar.Size=UDim2.new(1,0,0,TAB_H)
+TabBar.Position=UDim2.new(0,0,0,TITLE_H); TabBar.BackgroundColor3=P.MAIN
+TabBar.BorderSizePixel=0; TabBar.Parent=Win
+-- horizontal scroll for tabs on narrow screens
+TabBar.ClipsDescendants=true
+
+local TabScroll=Instance.new("ScrollingFrame")
+TabScroll.Size=UDim2.new(1,0,1,0); TabScroll.BackgroundTransparency=1
+TabScroll.ScrollBarThickness=0; TabScroll.ScrollingDirection=Enum.ScrollingDirection.X
+TabScroll.CanvasSize=UDim2.new(0,0,0,0); TabScroll.AutomaticCanvasSize=Enum.AutomaticSize.X
+TabScroll.Parent=TabBar
+do local ll=Instance.new("UIListLayout"); ll.FillDirection=Enum.FillDirection.Horizontal; ll.SortOrder=Enum.SortOrder.LayoutOrder; ll.Padding=UDim.new(0,1); ll.Parent=TabScroll end
+
+local AccentLine=Instance.new("Frame")
+AccentLine.Size=UDim2.new(0,60,0,2); AccentLine.Position=UDim2.new(0,0,1,-2)
+AccentLine.BackgroundColor3=P.ACCENT; AccentLine.BorderSizePixel=0; AccentLine.Parent=TabBar
+
+-- Body
+local Body=Instance.new("Frame")
+Body.Name="Body"
+Body.Size=UDim2.new(1,0,1,-(TITLE_H+TAB_H))
+Body.Position=UDim2.new(0,0,0,TITLE_H+TAB_H)
+Body.BackgroundTransparency=1; Body.Parent=Win
+
+-- ── TABS ──────────────────────────────────────
+local TABS={"main","esp","aimbot","move","misc","cfg"}
+local pages,tabBtns={},{}
+
+for i,name in ipairs(TABS) do
+    local TAB_W = IsMobile and math.max(62, math.floor(WIN_W/#TABS)) or 72
+
+    local btn=Instance.new("TextButton")
+    btn.Text=name; btn.Size=UDim2.new(0,TAB_W,1,0)
+    btn.BackgroundTransparency=1; btn.TextColor3=P.SUB
+    btn.TextSize=TAB_TXT; btn.Font=Enum.Font.Gotham
+    btn.LayoutOrder=i; btn.Parent=TabScroll
+    tabBtns[name]=btn
+
+    local page=Instance.new("ScrollingFrame")
+    page.Size=UDim2.new(1,0,1,0); page.BackgroundTransparency=1
+    page.ScrollBarThickness=IsMobile and 4 or 3
+    page.ScrollBarImageColor3=P.ACCENT
+    page.CanvasSize=UDim2.new(0,0,0,0); page.AutomaticCanvasSize=Enum.AutomaticSize.Y
+    page.Visible=false; page.Parent=Body
+    pages[name]=page
+
+    do local ll=Instance.new("UIListLayout"); ll.SortOrder=Enum.SortOrder.LayoutOrder; ll.Padding=UDim.new(0,IsMobile and 5 or 4); ll.Parent=page end
+    do local pd=Instance.new("UIPadding"); pd.PaddingLeft=UDim.new(0,10); pd.PaddingRight=UDim.new(0,10); pd.PaddingTop=UDim.new(0,8); pd.PaddingBottom=UDim.new(0,8); pd.Parent=page end
+end
+
+local function switchTab(name)
+    for n,pg in pairs(pages) do pg.Visible=(n==name) end
+    for n,btn in pairs(tabBtns) do
+        btn.TextColor3=n==name and P.ACCENT or P.SUB
+        btn.Font=n==name and Enum.Font.GothamBold or Enum.Font.Gotham
+    end
+    local btn=tabBtns[name]
+    if btn then
+        local relX=btn.AbsolutePosition.X-TabBar.AbsolutePosition.X
+        TweenService:Create(AccentLine,TweenInfo.new(0.12,Enum.EasingStyle.Quad),{
+            Position=UDim2.new(0,relX,1,-2),
+            Size=UDim2.new(0,btn.AbsoluteSize.X,0,2),
+        }):Play()
+    end
+end
+
+for name,btn in pairs(tabBtns) do
+    btn.MouseButton1Click:Connect(function() switchTab(name) end)
+end
+
+-- ══════════════════════════════════════════════
+--  COMPONENT BUILDERS  (touch-aware)
+-- ══════════════════════════════════════════════
+local function Section(parent,label,order)
+    local f=Instance.new("Frame"); f.Size=UDim2.new(1,0,0,20); f.BackgroundColor3=P.MAIN; f.BorderSizePixel=0; f.LayoutOrder=order or 0; f.Parent=parent
+    do local c=Instance.new("UICorner") c.CornerRadius=UDim.new(0,4) c.Parent=f end
+    local l=Instance.new("TextLabel"); l.Text="  "..label:upper(); l.Size=UDim2.new(1,0,1,0); l.BackgroundTransparency=1; l.TextColor3=P.ACCENT; l.TextSize=10; l.Font=Enum.Font.GothamBold; l.TextXAlignment=Enum.TextXAlignment.Left; l.Parent=f
+end
+
+-- Toggle — works on touch (MouseButton1Click fires on tap)
+local function Toggle(parent,label,cfgKey,order)
+    local row=Instance.new("Frame")
+    row.Size=UDim2.new(1,0,0,ROW_H); row.BackgroundColor3=P.PANEL; row.BorderSizePixel=0; row.LayoutOrder=order or 0; row.Parent=parent
+    do local c=Instance.new("UICorner") c.CornerRadius=UDim.new(0,6) c.Parent=row end
+    do local s=Instance.new("UIStroke") s.Color=P.OUTLINE s.Thickness=1 s.Parent=row end
+
+    local lbl=Instance.new("TextLabel"); lbl.Text="  "..label; lbl.Size=UDim2.new(1,-64,1,0); lbl.BackgroundTransparency=1; lbl.TextColor3=P.TEXT; lbl.TextSize=TXT_SZ; lbl.Font=Enum.Font.Gotham; lbl.TextXAlignment=Enum.TextXAlignment.Left; lbl.Parent=row
+
+    -- Larger pill on mobile for fat fingers
+    local PW=IsMobile and 46 or 36; local PH=IsMobile and 24 or 18
+    local KS=IsMobile and 18 or 13
+
+    local pill=Instance.new("Frame"); pill.Size=UDim2.new(0,PW,0,PH); pill.Position=UDim2.new(1,-(PW+10),0.5,-PH/2); pill.BorderSizePixel=0; pill.BackgroundColor3=CFG[cfgKey] and P.ACCENT or P.OFF; pill.Parent=row
+    do local c=Instance.new("UICorner") c.CornerRadius=UDim.new(1,0) c.Parent=pill end
+
+    local knob=Instance.new("Frame"); knob.Size=UDim2.new(0,KS,0,KS); knob.BorderSizePixel=0; knob.BackgroundColor3=P.WHITE; knob.Position=CFG[cfgKey] and UDim2.new(1,-(KS+2),0.5,-KS/2) or UDim2.new(0,2,0.5,-KS/2); knob.Parent=pill
+    do local c=Instance.new("UICorner") c.CornerRadius=UDim.new(1,0) c.Parent=knob end
+
+    local function refresh()
+        local on=CFG[cfgKey]
+        TweenService:Create(pill,TweenInfo.new(0.12),{BackgroundColor3=on and P.ACCENT or P.OFF}):Play()
+        TweenService:Create(knob,TweenInfo.new(0.12),{Position=on and UDim2.new(1,-(KS+2),0.5,-KS/2) or UDim2.new(0,2,0.5,-KS/2)}):Play()
+    end
+
+    local btn=Instance.new("TextButton"); btn.Size=UDim2.new(1,0,1,0); btn.BackgroundTransparency=1; btn.Text=""; btn.Parent=row
+    btn.MouseButton1Click:Connect(function() CFG[cfgKey]=not CFG[cfgKey]; refresh() end)
+    return row
+end
+
+-- Slider — touch drag supported
+local function Slider(parent,label,cfgKey,minV,maxV,order)
+    local row=Instance.new("Frame")
+    row.Size=UDim2.new(1,0,0,SLD_H); row.BackgroundColor3=P.PANEL; row.BorderSizePixel=0; row.LayoutOrder=order or 0; row.Parent=parent
+    do local c=Instance.new("UICorner") c.CornerRadius=UDim.new(0,6) c.Parent=row end
+    do local s=Instance.new("UIStroke") s.Color=P.OUTLINE s.Thickness=1 s.Parent=row end
+
+    local lbl=Instance.new("TextLabel"); lbl.Text="  "..label; lbl.Size=UDim2.new(1,-60,0,22); lbl.Position=UDim2.new(0,0,0,4); lbl.BackgroundTransparency=1; lbl.TextColor3=P.TEXT; lbl.TextSize=TXT_SZ; lbl.Font=Enum.Font.Gotham; lbl.TextXAlignment=Enum.TextXAlignment.Left; lbl.Parent=row
+    local valLbl=Instance.new("TextLabel"); valLbl.Size=UDim2.new(0,52,0,22); valLbl.Position=UDim2.new(1,-56,0,4); valLbl.BackgroundTransparency=1; valLbl.TextColor3=P.ACCENT; valLbl.TextSize=11; valLbl.Font=Enum.Font.GothamMedium; valLbl.TextXAlignment=Enum.TextXAlignment.Right; valLbl.Text=tostring(CFG[cfgKey]); valLbl.Parent=row
+
+    -- Thicker track + bigger thumb for mobile
+    local TRACK_H=IsMobile and 7 or 4; local THUMB_S=IsMobile and 16 or 10
+
+    local track=Instance.new("Frame"); track.Size=UDim2.new(1,-20,0,TRACK_H); track.Position=UDim2.new(0,10,1,-TRACK_H-8); track.BackgroundColor3=P.OUTLINE; track.BorderSizePixel=0; track.Parent=row
+    do local c=Instance.new("UICorner") c.CornerRadius=UDim.new(1,0) c.Parent=track end
+
+    local ratio0=(CFG[cfgKey]-minV)/(maxV-minV)
+    local fill=Instance.new("Frame"); fill.Size=UDim2.new(ratio0,0,1,0); fill.BackgroundColor3=P.ACCENT; fill.BorderSizePixel=0; fill.Parent=track
+    do local c=Instance.new("UICorner") c.CornerRadius=UDim.new(1,0) c.Parent=fill end
+
+    local thumb=Instance.new("Frame"); thumb.Size=UDim2.new(0,THUMB_S,0,THUMB_S); thumb.Position=UDim2.new(ratio0,-THUMB_S/2,0.5,-THUMB_S/2); thumb.BackgroundColor3=P.WHITE; thumb.BorderSizePixel=0; thumb.Parent=track
+    do local c=Instance.new("UICorner") c.CornerRadius=UDim.new(1,0) c.Parent=thumb end
+
+    local dragging=false
+
+    local function applyInput(posX)
+        local rel=math.clamp((posX-track.AbsolutePosition.X)/track.AbsoluteSize.X,0,1)
+        local val=math.floor(minV+rel*(maxV-minV))
+        CFG[cfgKey]=val; valLbl.Text=tostring(val)
+        fill.Size=UDim2.new(rel,0,1,0)
+        thumb.Position=UDim2.new(rel,-THUMB_S/2,0.5,-THUMB_S/2)
+    end
+
+    -- Mouse
+    track.InputBegan:Connect(function(inp)
+        if inp.UserInputType==Enum.UserInputType.MouseButton1 then
+            dragging=true; applyInput(inp.Position.X)
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(inp)
+        if inp.UserInputType==Enum.UserInputType.MouseButton1 then dragging=false end
+    end)
+    UserInputService.InputChanged:Connect(function(inp)
+        if dragging and inp.UserInputType==Enum.UserInputType.MouseMovement then
+            applyInput(inp.Position.X)
+        end
+    end)
+
+    -- Touch
+    track.InputBegan:Connect(function(inp)
+        if inp.UserInputType==Enum.UserInputType.Touch then
+            dragging=true; applyInput(inp.Position.X)
+        end
+    end)
+    track.InputEnded:Connect(function(inp)
+        if inp.UserInputType==Enum.UserInputType.Touch then dragging=false end
+    end)
+    track.InputChanged:Connect(function(inp)
+        if dragging and inp.UserInputType==Enum.UserInputType.Touch then
+            applyInput(inp.Position.X)
+        end
+    end)
+
+    return row
+end
+
+local function BtnFull(parent,label,cb,order)
+    local b=Instance.new("TextButton"); b.Text=label; b.Size=UDim2.new(1,0,0,IsMobile and 36 or 28); b.BackgroundColor3=P.MAIN; b.TextColor3=P.TEXT; b.TextSize=TXT_SZ; b.Font=Enum.Font.Gotham; b.BorderSizePixel=0; b.LayoutOrder=order or 0; b.Parent=parent
+    do local c=Instance.new("UICorner") c.CornerRadius=UDim.new(0,5) c.Parent=b end
+    do local s=Instance.new("UIStroke") s.Color=P.OUTLINE s.Thickness=1 s.Parent=b end
+    b.MouseButton1Click:Connect(cb)
+    -- tap flash (works on mobile, no hover needed)
+    b.MouseButton1Down:Connect(function() b.BackgroundColor3=P.ACCENT end)
+    b.MouseButton1Up:Connect(function() task.delay(0.12,function() b.BackgroundColor3=P.MAIN end) end)
+    return b
+end
+
+local function Btn2(parent,label,cb,order)
+    local b=Instance.new("TextButton"); b.Text=label; b.Size=UDim2.new(0.48,0,0,IsMobile and 36 or 28); b.BackgroundColor3=P.MAIN; b.TextColor3=P.TEXT; b.TextSize=TXT_SZ; b.Font=Enum.Font.Gotham; b.BorderSizePixel=0; b.LayoutOrder=order or 0; b.Parent=parent
+    do local c=Instance.new("UICorner") c.CornerRadius=UDim.new(0,5) c.Parent=b end
+    do local s=Instance.new("UIStroke") s.Color=P.OUTLINE s.Thickness=1 s.Parent=b end
+    b.MouseButton1Click:Connect(cb)
+    b.MouseButton1Down:Connect(function() b.BackgroundColor3=P.ACCENT end)
+    b.MouseButton1Up:Connect(function() task.delay(0.12,function() b.BackgroundColor3=P.MAIN end) end)
+    return b
+end
+
+local function TextInput(parent,label,cfgKey,order)
+    local row=Instance.new("Frame"); row.Size=UDim2.new(1,0,0,IsMobile and 50 or 42); row.BackgroundColor3=P.PANEL; row.BorderSizePixel=0; row.LayoutOrder=order or 0; row.Parent=parent
+    do local c=Instance.new("UICorner") c.CornerRadius=UDim.new(0,6) c.Parent=row end
+    do local s=Instance.new("UIStroke") s.Color=P.OUTLINE s.Thickness=1 s.Parent=row end
+    local lbl=Instance.new("TextLabel"); lbl.Text="  "..label; lbl.Size=UDim2.new(1,0,0,18); lbl.Position=UDim2.new(0,0,0,3); lbl.BackgroundTransparency=1; lbl.TextColor3=P.SUB; lbl.TextSize=10; lbl.Font=Enum.Font.Gotham; lbl.TextXAlignment=Enum.TextXAlignment.Left; lbl.Parent=row
+    local box=Instance.new("TextBox"); box.Size=UDim2.new(1,-20,0,IsMobile and 24 or 18); box.Position=UDim2.new(0,10,0,20); box.BackgroundColor3=P.BG; box.TextColor3=P.TEXT; box.TextSize=TXT_SZ; box.Font=Enum.Font.GothamMedium; box.BorderSizePixel=0; box.ClearTextOnFocus=false; box.Text=tostring(CFG[cfgKey] or ""); box.Parent=row
+    do local c=Instance.new("UICorner") c.CornerRadius=UDim.new(0,4) c.Parent=box end
+    box.FocusLost:Connect(function() CFG[cfgKey]=box.Text end)
+    return row,box
+end
+
+local function StatusBadge(parent,label,cfgKey,order)
+    local row=Instance.new("Frame"); row.Size=UDim2.new(1,0,0,ROW_H); row.BackgroundColor3=P.PANEL; row.BorderSizePixel=0; row.LayoutOrder=order or 0; row.Parent=parent
+    do local c=Instance.new("UICorner") c.CornerRadius=UDim.new(0,5) c.Parent=row end
+    local lbl=Instance.new("TextLabel"); lbl.Text="  "..label; lbl.Size=UDim2.new(1,-70,1,0); lbl.BackgroundTransparency=1; lbl.TextColor3=P.TEXT; lbl.TextSize=TXT_SZ; lbl.Font=Enum.Font.Gotham; lbl.TextXAlignment=Enum.TextXAlignment.Left; lbl.Parent=row
+    local badge=Instance.new("TextLabel"); badge.Size=UDim2.new(0,52,0,IsMobile and 24 or 18); badge.Position=UDim2.new(1,-60,0.5,IsMobile and -12 or -9); badge.TextSize=11; badge.Font=Enum.Font.GothamBold; badge.BorderSizePixel=0; badge.Parent=row
+    do local c=Instance.new("UICorner") c.CornerRadius=UDim.new(0,5) c.Parent=badge end
+    RunService.RenderStepped:Connect(function()
+        local on=CFG[cfgKey]; badge.Text=on and " ON " or " OFF"; badge.BackgroundColor3=on and P.ON or P.RED; badge.TextColor3=P.WHITE
+    end)
+    local btn=Instance.new("TextButton"); btn.Size=UDim2.new(1,0,1,0); btn.BackgroundTransparency=1; btn.Text=""; btn.Parent=row
+    btn.MouseButton1Click:Connect(function() CFG[cfgKey]=not CFG[cfgKey] end)
+    return row
+end
+
+-- ══════════════════════════════════════════════
+--  POPULATE TABS
+-- ══════════════════════════════════════════════
+
+-- MAIN
+do
+    local p=pages["main"]
+    Section(p,"Status",1)
+    StatusBadge(p,"ESP",           "ESP_ENABLED",  2)
+    StatusBadge(p,"Aimbot",        "AIM_ENABLED",  3)
+    StatusBadge(p,"Silent Aim",    "AIM_SILENT",   4)
+    StatusBadge(p,"No Recoil",     "NORECOIL",     5)
+    StatusBadge(p,"Infinite Ammo", "INFINITE_AMMO",6)
+    StatusBadge(p,"Speed",         "SPEED_ENABLED",7)
+    Section(p,"Actions",8)
+    local br=Instance.new("Frame"); br.Size=UDim2.new(1,0,0,IsMobile and 36 or 28); br.BackgroundTransparency=1; br.LayoutOrder=9; br.Parent=p
+    do local l=Instance.new("UIListLayout"); l.FillDirection=Enum.FillDirection.Horizontal; l.Padding=UDim.new(0,4); l.Parent=br end
+    Btn2(br,"Kill GUI",function() Screen:Destroy() end,1)
+    Btn2(br,"Rejoin",  function() game:GetService("TeleportService"):Teleport(game.PlaceId,LocalPlayer) end,2)
+end
+
+-- ESP
+do
+    local p=pages["esp"]
+    Section(p,"Visibility",1)
+    Toggle(p,"Enable ESP",     "ESP_ENABLED",  2)
+    Toggle(p,"Bounding Box",   "ESP_BOX",      3)
+    Toggle(p,"Name Label",     "ESP_NAME",     4)
+    Toggle(p,"Health Bar",     "ESP_HEALTH",   5)
+    Toggle(p,"Distance",       "ESP_DISTANCE", 6)
+    Toggle(p,"Tracers",        "ESP_TRACERS",  7)
+    Section(p,"Range",8)
+    Slider(p,"Max Dist (studs)","ESP_MAX_DIST",100,3000,9)
+end
+
+-- AIMBOT
+do
+    local p=pages["aimbot"]
+    Section(p,"Targeting",1)
+    Toggle(p,"Enable Aimbot",  "AIM_ENABLED",  2)
+    Toggle(p,"Silent Aim",     "AIM_SILENT",   3)
+    Toggle(p,"Draw FOV",       "AIM_DRAW_FOV", 4)
+    Toggle(p,"Team Check",     "AIM_TEAM_CHECK",5)
+    Section(p,"Parameters",6)
+    Slider(p,"FOV Radius (px)","AIM_FOV",      40,500,7)
+    Slider(p,"Smoothing ×100", "AIM_SMOOTH",   1, 100,8)
+    Section(p,"Combat",9)
+    Toggle(p,"No Recoil",      "NORECOIL",    10)
+    Toggle(p,"No Spread",      "NO_SPREAD",   11)
+end
+
+-- MOVEMENT
+do
+    local p=pages["move"]
+    Section(p,"Speed",1)
+    Toggle(p,"Speed Hack",     "SPEED_ENABLED",2)
+    Slider(p,"Walk Speed",     "SPEED_VALUE",  8,150,3)
+    Section(p,"Jump",4)
+    Toggle(p,"Bunny Hop",      "BHOP_ENABLED", 5)
+end
+
+-- MISC
+do
+    local p=pages["misc"]
+    Section(p,"Weapons",1)
+    Toggle(p,"Infinite Ammo",  "INFINITE_AMMO",2)
+    Toggle(p,"No Spread",      "NO_SPREAD",    3)
+    Section(p,"Remote Scanner",4)
+    BtnFull(p,"Print all RemoteEvents", function()
+        print("=== REMOTE SCANNER ===")
+        for _,v in ipairs(game.ReplicatedStorage:GetDescendants()) do
+            if v:IsA("RemoteEvent") or v:IsA("RemoteFunction") then print(v.ClassName..": "..v:GetFullName()) end
+        end
+        print("=== END ===")
+    end,5)
+end
+
+-- CONFIG
+do
+    local p=pages["cfg"]
+    Section(p,"Config",1)
+    local _,cfgBox=TextInput(p,"Config name","CONFIG_NAME",2)
+    local br=Instance.new("Frame"); br.Size=UDim2.new(1,0,0,IsMobile and 36 or 28); br.BackgroundTransparency=1; br.LayoutOrder=3; br.Parent=p
+    do local l=Instance.new("UIListLayout"); l.FillDirection=Enum.FillDirection.Horizontal; l.Padding=UDim.new(0,4); l.Parent=br end
+    Btn2(br,"Save",function() saveConfig(CFG.CONFIG_NAME); cfgBox.TextColor3=P.ON; task.delay(1.2,function() cfgBox.TextColor3=P.TEXT end) end,1)
+    Btn2(br,"Load",function() loadConfig(CFG.CONFIG_NAME); cfgBox.TextColor3=P.ACCENT; task.delay(1.2,function() cfgBox.TextColor3=P.TEXT end) end,2)
+
+    Section(p,"Config List",4)
+    local cfgList=Instance.new("ScrollingFrame"); cfgList.Size=UDim2.new(1,0,0,100); cfgList.BackgroundColor3=P.BG; cfgList.BorderSizePixel=0; cfgList.ScrollBarThickness=IsMobile and 5 or 3; cfgList.ScrollBarImageColor3=P.ACCENT; cfgList.CanvasSize=UDim2.new(0,0,0,0); cfgList.AutomaticCanvasSize=Enum.AutomaticSize.Y; cfgList.LayoutOrder=5; cfgList.Parent=p
+    do local c=Instance.new("UICorner") c.CornerRadius=UDim.new(0,5) c.Parent=cfgList end
+    do local l=Instance.new("UIListLayout"); l.SortOrder=Enum.SortOrder.LayoutOrder; l.Padding=UDim.new(0,2); l.Parent=cfgList end
+    do local pd=Instance.new("UIPadding"); pd.PaddingLeft=UDim.new(0,6); pd.PaddingTop=UDim.new(0,4); pd.Parent=cfgList end
+
+    local function refreshList()
+        for _,c in ipairs(cfgList:GetChildren()) do if c:IsA("TextButton") then c:Destroy() end end
+        for i,name in ipairs(listConfigs()) do
+            local e=Instance.new("TextButton"); e.Text=name; e.Size=UDim2.new(1,-12,0,IsMobile and 30 or 24); e.BackgroundColor3=name==CFG.CONFIG_NAME and P.ACCENT or P.MAIN; e.TextColor3=P.TEXT; e.TextSize=TXT_SZ; e.Font=Enum.Font.Gotham; e.BorderSizePixel=0; e.LayoutOrder=i; e.Parent=cfgList
+            do local c=Instance.new("UICorner") c.CornerRadius=UDim.new(0,4) c.Parent=e end
+            e.MouseButton1Click:Connect(function() CFG.CONFIG_NAME=name; cfgBox.Text=name; loadConfig(name); refreshList() end)
+        end
+    end
+    BtnFull(p,"⟳  Refresh list",refreshList,6); refreshList()
+end
+
+-- ══════════════════════════════════════════════
+--  ON-SCREEN AIM BUTTON (mobile only)
+--  Hold it to activate aimbot — replaces RMB
+-- ══════════════════════════════════════════════
+if IsMobile then
+    local AimBtn=Instance.new("TextButton")
+    AimBtn.Text="🎯"
+    AimBtn.Size=UDim2.new(0,64,0,64)
+    -- bottom-right corner, above joystick area
+    AimBtn.Position=UDim2.new(1,-80,1,-120)
+    AimBtn.BackgroundColor3=c3(30,30,45)
+    AimBtn.TextColor3=P.WHITE
+    AimBtn.TextSize=28
+    AimBtn.Font=Enum.Font.GothamBold
+    AimBtn.BorderSizePixel=0
+    AimBtn.ZIndex=20
+    AimBtn.Parent=Screen
+    do local c=Instance.new("UICorner") c.CornerRadius=UDim.new(1,0) c.Parent=AimBtn end
+    do local s=Instance.new("UIStroke") s.Color=P.ACCENT s.Thickness=2 s.Parent=AimBtn end
+
+    AimBtn.MouseButton1Down:Connect(function()
+        aimActive=true
+        TweenService:Create(AimBtn,TweenInfo.new(0.1),{BackgroundColor3=P.ACCENT}):Play()
+    end)
+    AimBtn.MouseButton1Up:Connect(function()
+        aimActive=false
+        TweenService:Create(AimBtn,TweenInfo.new(0.1),{BackgroundColor3=c3(30,30,45)}):Play()
+    end)
+
+    -- Touch events for the aim button
+    AimBtn.InputBegan:Connect(function(inp)
+        if inp.UserInputType==Enum.UserInputType.Touch then
+            aimActive=true
+            TweenService:Create(AimBtn,TweenInfo.new(0.1),{BackgroundColor3=P.ACCENT}):Play()
+        end
+    end)
+    AimBtn.InputEnded:Connect(function(inp)
+        if inp.UserInputType==Enum.UserInputType.Touch then
+            aimActive=false
+            TweenService:Create(AimBtn,TweenInfo.new(0.1),{BackgroundColor3=c3(30,30,45)}):Play()
+        end
+    end)
+else
+    -- Desktop: RMB activates aimbot
+    RunService.RenderStepped:Connect(function()
+        aimActive=UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+    end)
+end
+
+-- ══════════════════════════════════════════════
+--  PLAYER LIFECYCLE
+-- ══════════════════════════════════════════════
+Players.PlayerAdded:Connect(function(p) p.CharacterAdded:Connect(function() task.wait(1); makeESP(p) end) end)
+Players.PlayerRemoving:Connect(function(p) killESP(p) end)
+for _,p in ipairs(Players:GetPlayers()) do if p~=LocalPlayer then makeESP(p) end end
+
+-- ══════════════════════════════════════════════
+--  INIT
+-- ══════════════════════════════════════════════
+switchTab("main")
+hookSilentAim()
+
+local platform = IsMobile and "MOBILE 📱" or "DESKTOP 🖥️"
+print("[LoL Hub]
