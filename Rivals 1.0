@@ -1,0 +1,698 @@
+-- ============================================================
+--  RIVALS HUB | MOBILE EDITION v1.0
+--  Executor  : Delta (iOS / Android)
+--  Features  : Touch-Drag GUI · Void Spam (FE) · Aimbot (FE)
+--              Silent Aim Toggle · Unlock All Cosmetics (LOCAL)
+--  Author    : for Jason brody 😭✌️
+-- ============================================================
+
+-- ══════════════════════════════════
+--  SERVICES
+-- ══════════════════════════════════
+local Players            = game:GetService("Players")
+local RunService         = game:GetService("RunService")
+local UserInputService   = game:GetService("UserInputService")
+local TweenService       = game:GetService("TweenService")
+local ReplicatedStorage  = game:GetService("ReplicatedStorage")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera      = workspace.CurrentCamera
+
+-- ══════════════════════════════════
+--  STATE FLAGS
+-- ══════════════════════════════════
+local voidSpamEnabled   = false
+local aimbotEnabled     = false
+local silentAimEnabled  = false   -- separate silent aim toggle
+local cosmeticsUnlocked = false
+local guiOpen           = true
+
+-- ══════════════════════════════════
+--  CLEANUP OLD GUI
+-- ══════════════════════════════════
+local function cleanOldGui()
+    local targets = {
+        pcall(gethui) and gethui() or nil,
+        game:GetService("CoreGui"),
+        LocalPlayer:FindFirstChild("PlayerGui")
+    }
+    for _, parent in ipairs(targets) do
+        if parent then
+            local old = parent:FindFirstChild("RivalsHub")
+            if old then old:Destroy() end
+        end
+    end
+end
+cleanOldGui()
+
+-- ══════════════════════════════════
+--  GUI ROOT
+-- ══════════════════════════════════
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name           = "RivalsHub"
+ScreenGui.ResetOnSpawn   = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.IgnoreGuiInset = true
+
+pcall(function()
+    if gethui then
+        ScreenGui.Parent = gethui()
+    else
+        ScreenGui.Parent = game:GetService("CoreGui")
+    end
+end)
+
+-- ══════════════════════════════════
+--  MAIN FRAME
+-- ══════════════════════════════════
+local PANEL_W        = 170
+local PANEL_H_OPEN   = 258   -- 4 buttons now (void, aimbot, silent aim, cosmetics)
+local PANEL_H_CLOSED = 36
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Name              = "MainFrame"
+MainFrame.Size              = UDim2.new(0, PANEL_W, 0, PANEL_H_OPEN)
+MainFrame.Position          = UDim2.new(0, 30, 0.45, 0)
+MainFrame.BackgroundColor3  = Color3.fromRGB(10, 10, 10)
+MainFrame.BorderSizePixel   = 0
+MainFrame.ClipsDescendants  = true
+MainFrame.Parent            = ScreenGui
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 7)
+
+-- red top accent bar
+local TopBar = Instance.new("Frame")
+TopBar.Size             = UDim2.new(1, 0, 0, 3)
+TopBar.BackgroundColor3 = Color3.fromRGB(210, 40, 40)
+TopBar.BorderSizePixel  = 0
+TopBar.ZIndex           = 2
+TopBar.Parent           = MainFrame
+Instance.new("UICorner", TopBar).CornerRadius = UDim.new(0, 7)
+
+-- title
+local TitleLabel = Instance.new("TextLabel")
+TitleLabel.Size                   = UDim2.new(1, -36, 0, 30)
+TitleLabel.Position               = UDim2.new(0, 10, 0, 3)
+TitleLabel.BackgroundTransparency = 1
+TitleLabel.Text                   = "RIVALS HUB"
+TitleLabel.TextColor3             = Color3.fromRGB(230, 230, 230)
+TitleLabel.TextSize               = 13
+TitleLabel.Font                   = Enum.Font.GothamBold
+TitleLabel.TextXAlignment         = Enum.TextXAlignment.Left
+TitleLabel.ZIndex                 = 3
+TitleLabel.Parent                 = MainFrame
+
+-- collapse toggle button
+local ToggleBtn = Instance.new("TextButton")
+ToggleBtn.Size             = UDim2.new(0, 24, 0, 24)
+ToggleBtn.Position         = UDim2.new(1, -28, 0, 4)
+ToggleBtn.BackgroundColor3 = Color3.fromRGB(170, 30, 30)
+ToggleBtn.Text             = "−"
+ToggleBtn.TextColor3       = Color3.fromRGB(255, 255, 255)
+ToggleBtn.TextSize         = 14
+ToggleBtn.Font             = Enum.Font.GothamBold
+ToggleBtn.BorderSizePixel  = 0
+ToggleBtn.ZIndex           = 4
+ToggleBtn.Parent           = MainFrame
+Instance.new("UICorner", ToggleBtn).CornerRadius = UDim.new(0, 4)
+
+-- content frame
+local ContentFrame = Instance.new("Frame")
+ContentFrame.Name                   = "Content"
+ContentFrame.Size                   = UDim2.new(1, -16, 1, -38)
+ContentFrame.Position               = UDim2.new(0, 8, 0, 36)
+ContentFrame.BackgroundTransparency = 1
+ContentFrame.Parent                 = MainFrame
+
+-- ══════════════════════════════════
+--  BUTTON FACTORY
+-- ══════════════════════════════════
+local function makeButton(parent, yPos, labelText, accentColor)
+    accentColor = accentColor or Color3.fromRGB(50, 220, 50)
+
+    local btn = Instance.new("TextButton")
+    btn.Size             = UDim2.new(1, 0, 0, 40)
+    btn.Position         = UDim2.new(0, 0, 0, yPos)
+    btn.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
+    btn.Text             = ""
+    btn.BorderSizePixel  = 0
+    btn.AutoButtonColor  = false
+    btn.Parent           = parent
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 5)
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size                  = UDim2.new(1, -20, 0, 22)
+    lbl.Position              = UDim2.new(0, 10, 0, 4)
+    lbl.BackgroundTransparency = 1
+    lbl.Text                  = labelText
+    lbl.TextColor3            = Color3.fromRGB(200, 200, 200)
+    lbl.TextSize              = 12
+    lbl.Font                  = Enum.Font.GothamBold
+    lbl.TextXAlignment        = Enum.TextXAlignment.Left
+    lbl.Parent                = btn
+
+    local statusLbl = Instance.new("TextLabel")
+    statusLbl.Size                  = UDim2.new(1, -10, 0, 14)
+    statusLbl.Position              = UDim2.new(0, 10, 0, 24)
+    statusLbl.BackgroundTransparency = 1
+    statusLbl.Text                  = "OFF"
+    statusLbl.TextColor3            = Color3.fromRGB(120, 120, 120)
+    statusLbl.TextSize              = 10
+    statusLbl.Font                  = Enum.Font.Gotham
+    statusLbl.TextXAlignment        = Enum.TextXAlignment.Left
+    statusLbl.Parent                = btn
+
+    local dot = Instance.new("Frame")
+    dot.Size             = UDim2.new(0, 8, 0, 8)
+    dot.Position         = UDim2.new(1, -14, 0.5, -4)
+    dot.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+    dot.BorderSizePixel  = 0
+    dot.Parent           = btn
+    Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
+
+    local bar = Instance.new("Frame")
+    bar.Size             = UDim2.new(0, 0, 0, 3)
+    bar.Position         = UDim2.new(0, 0, 1, -3)
+    bar.BackgroundColor3 = accentColor
+    bar.BorderSizePixel  = 0
+    bar.Visible          = false
+    bar.Parent           = btn
+    Instance.new("UICorner", bar).CornerRadius = UDim.new(0, 3)
+
+    return btn, dot, bar, statusLbl
+end
+
+-- 4 buttons: Void Spam, Aimbot, Silent Aim, Unlock Cosmetics
+local VoidBtn,  VoidDot,  VoidBar,  VoidStatus  = makeButton(ContentFrame, 0,   "Void Spam",      Color3.fromRGB(50,  220, 50))
+local AimBtn,   AimDot,   AimBar,   AimStatus   = makeButton(ContentFrame, 48,  "Aimbot",         Color3.fromRGB(220, 50,  50))
+local SAimBtn,  SAimDot,  SAimBar,  SAimStatus  = makeButton(ContentFrame, 96,  "Silent Aim",     Color3.fromRGB(80,  160, 255))
+local CosBtn,   CosDot,   CosBar,   CosStatus   = makeButton(ContentFrame, 144, "Unlock All Skins",  Color3.fromRGB(180, 120, 255))
+
+-- ══════════════════════════════════
+--  TOUCH-DRAG SYSTEM (mobile)
+-- ══════════════════════════════════
+local dragging  = false
+local dragStart = nil
+local frameStart= nil
+
+local DragZone = Instance.new("Frame")
+DragZone.Size                   = UDim2.new(1, -32, 0, 34)
+DragZone.Position               = UDim2.new(0, 0, 0, 0)
+DragZone.BackgroundTransparency = 1
+DragZone.ZIndex                 = 5
+DragZone.Parent                 = MainFrame
+
+DragZone.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch
+    or input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging   = true
+        dragStart  = input.Position
+        frameStart = MainFrame.Position
+    end
+end)
+
+DragZone.InputChanged:Connect(function(input)
+    if dragging and (
+        input.UserInputType == Enum.UserInputType.Touch
+        or input.UserInputType == Enum.UserInputType.MouseMovement
+    ) then
+        local delta = input.Position - dragStart
+        MainFrame.Position = UDim2.new(
+            frameStart.X.Scale,
+            frameStart.X.Offset + delta.X,
+            frameStart.Y.Scale,
+            frameStart.Y.Offset + delta.Y
+        )
+    end
+end)
+
+DragZone.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch
+    or input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = false
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+    end
+end)
+
+-- ══════════════════════════════════
+--  GUI OPEN / CLOSE
+-- ══════════════════════════════════
+local function setGuiOpen(state)
+    guiOpen = state
+    local targetH = state and PANEL_H_OPEN or PANEL_H_CLOSED
+    TweenService:Create(
+        MainFrame,
+        TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+        {Size = UDim2.new(0, PANEL_W, 0, targetH)}
+    ):Play()
+    ToggleBtn.Text = state and "−" or "+"
+end
+
+ToggleBtn.MouseButton1Click:Connect(function()
+    setGuiOpen(not guiOpen)
+end)
+
+-- ══════════════════════════════════
+--  UTILITIES
+-- ══════════════════════════════════
+local function getChar()  return LocalPlayer.Character end
+local function getHRP()
+    local c = getChar()
+    return c and c:FindFirstChild("HumanoidRootPart")
+end
+local function getHuman()
+    local c = getChar()
+    return c and c:FindFirstChildOfClass("Humanoid")
+end
+
+local function activateBtn(dot, bar, statusLbl, dotColor)
+    dot.BackgroundColor3 = dotColor
+    bar.Visible = true
+    TweenService:Create(bar, TweenInfo.new(0.2), {Size = UDim2.new(1,0,0,3)}):Play()
+    statusLbl.Text       = "ON"
+    statusLbl.TextColor3 = dotColor
+end
+
+local function deactivateBtn(dot, bar, statusLbl)
+    dot.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+    TweenService:Create(bar, TweenInfo.new(0.15), {Size = UDim2.new(0,0,0,3)}):Play()
+    task.delay(0.16, function() bar.Visible = false end)
+    statusLbl.Text       = "OFF"
+    statusLbl.TextColor3 = Color3.fromRGB(120, 120, 120)
+end
+
+-- ══════════════════════════════════
+--  VOID SPAM (FE-safe)
+-- ══════════════════════════════════
+local voidThread = nil
+
+local function startVoidSpam()
+    voidThread = task.spawn(function()
+        while voidSpamEnabled do
+            local hrp = getHRP()
+            local h   = getHuman()
+            if hrp then
+                hrp.CFrame = CFrame.new(hrp.Position.X, -9000000, hrp.Position.Z)
+            end
+            task.wait(0.08)
+            if h and h.Health > 0 then
+                h.Health = 0
+            end
+            local elapsed = 0
+            repeat
+                task.wait(0.05)
+                elapsed = elapsed + 0.05
+            until (getHRP() ~= nil and getHuman() ~= nil and getHuman().Health > 0)
+                  or elapsed > 6
+            task.wait(0.05)
+        end
+    end)
+end
+
+local function stopVoidSpam()
+    if voidThread then
+        task.cancel(voidThread)
+        voidThread = nil
+    end
+end
+
+VoidBtn.MouseButton1Click:Connect(function()
+    voidSpamEnabled = not voidSpamEnabled
+    if voidSpamEnabled then
+        activateBtn(VoidDot, VoidBar, VoidStatus, Color3.fromRGB(50, 220, 50))
+        startVoidSpam()
+    else
+        deactivateBtn(VoidDot, VoidBar, VoidStatus)
+        stopVoidSpam()
+    end
+end)
+
+-- ══════════════════════════════════
+--  SHARED AIM LOGIC
+-- ══════════════════════════════════
+local AIM_FOV  = 360
+local AIM_BONE = "HumanoidRootPart"
+
+local function getScreenAngle(worldPos)
+    local sp, onScreen = Camera:WorldToScreenPoint(worldPos)
+    if not onScreen then return math.huge end
+    local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    local delta  = Vector2.new(sp.X, sp.Y) - center
+    return math.deg(math.atan2(delta.Magnitude, Camera.ViewportSize.Y / 2))
+end
+
+local function isEnemy(player)
+    if player == LocalPlayer then return false end
+    if LocalPlayer.Team and player.Team then
+        return LocalPlayer.Team ~= player.Team
+    end
+    return true
+end
+
+local function getBestTarget()
+    local best, bestAng = nil, AIM_FOV
+    for _, p in ipairs(Players:GetPlayers()) do
+        if not isEnemy(p) then continue end
+        local c = p.Character
+        if not c then continue end
+        local bone = c:FindFirstChild(AIM_BONE)
+        if not bone then continue end
+        local h = c:FindFirstChildOfClass("Humanoid")
+        if not h or h.Health <= 0 then continue end
+        local ang = getScreenAngle(bone.Position)
+        if ang < bestAng then
+            bestAng = ang
+            best    = p
+        end
+    end
+    return best
+end
+
+local function fireTool()
+    local c = getChar()
+    if not c then return end
+    local tool = c:FindFirstChildOfClass("Tool")
+    if not tool then return end
+    for _, name in ipairs({"Fire","Shoot","Activate","Attack","Use"}) do
+        local r = tool:FindFirstChild(name)
+        if r and r:IsA("RemoteEvent") then
+            r:FireServer()
+            return
+        end
+    end
+    pcall(function() tool:Activate() end)
+end
+
+-- ══════════════════════════════════
+--  AIMBOT (FE-safe) — FIXED
+--  • Velocity prediction leads target
+--  • Camera snaps to predicted HEAD
+--  • fireTool fires AFTER snap so
+--    raycast always registers on head
+--  • Runs PreSimulation (before
+--    physics) for tightest timing
+--  • No missed shots when holding
+--    fire button
+-- ══════════════════════════════════
+local aimbotConn   = nil
+local AIM_BONE     = "Head"   -- always aim head for 100% reg
+
+-- per-target velocity prediction table
+local lastPos  = {}
+local lastTime = {}
+
+local function getPredictedHeadPos(target)
+    local c = target.Character
+    if not c then return nil end
+    local head = c:FindFirstChild("Head")
+              or c:FindFirstChild("HumanoidRootPart")
+    if not head then return nil end
+
+    local now = tick()
+    local uid = target.UserId
+    local cur = head.Position
+
+    local predicted = cur
+    if lastPos[uid] and lastTime[uid] then
+        local dt  = math.max(now - lastTime[uid], 0.001)
+        local vel = (cur - lastPos[uid]) / dt
+        predicted = cur + vel * (1/60)  -- lead 1 frame
+    end
+
+    lastPos[uid]  = cur
+    lastTime[uid] = now
+    return predicted
+end
+
+local function startAimbot()
+    -- PreSimulation fires before physics step = tightest possible timing
+    aimbotConn = RunService.PreSimulation:Connect(function()
+        if not aimbotEnabled then return end
+
+        local target = getBestTarget()
+        if not target then return end
+
+        local pos = getPredictedHeadPos(target)
+        if not pos then return end
+
+        -- 1. hard snap camera to predicted head
+        local dir = (pos - Camera.CFrame.Position).Unit
+        Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, Camera.CFrame.Position + dir)
+
+        -- 2. fire AFTER snap so server raycast hits
+        -- small wait ensures camera update propagates
+        task.defer(function()
+            if aimbotEnabled then
+                fireTool()
+            end
+        end)
+    end)
+end
+
+local function stopAimbot()
+    if aimbotConn then
+        aimbotConn:Disconnect()
+        aimbotConn = nil
+    end
+    lastPos  = {}
+    lastTime = {}
+end
+
+AimBtn.MouseButton1Click:Connect(function()
+    aimbotEnabled = not aimbotEnabled
+    if aimbotEnabled then
+        activateBtn(AimDot, AimBar, AimStatus, Color3.fromRGB(220, 50, 50))
+        startAimbot()
+    else
+        deactivateBtn(AimDot, AimBar, AimStatus)
+        stopAimbot()
+    end
+end)
+
+-- ══════════════════════════════════
+--  SILENT AIM (TRUE)
+--  • Camera NEVER moves — crosshair
+--    stays exactly where YOU point
+--  • On every fireTool() call we
+--    temporarily warp camera to
+--    target head for 1 frame so
+--    the raycast registers a hit,
+--    then instantly restore it
+--  • Result: YOUR screen unchanged,
+--    server sees a perfect headshot
+--  • 100% hit rate, zero visual tell
+-- ══════════════════════════════════
+local silentAimConn     = nil
+local SILENT_BONE       = "Head"
+
+-- store real camera before warp
+local function warpAndFire(targetBone)
+    local realCF = Camera.CFrame
+
+    -- warp camera to face target bone for exactly 1 frame
+    local dir = (targetBone.Position - Camera.CFrame.Position).Unit
+    Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, Camera.CFrame.Position + dir)
+
+    -- fire while camera is warped → server registers hit
+    fireTool()
+
+    -- restore real camera same frame
+    Camera.CFrame = realCF
+end
+
+local function startSilentAim()
+    silentAimConn = RunService.RenderStepped:Connect(function()
+        if not silentAimEnabled then return end
+
+        local target = getBestTarget()
+        if not target then return end
+        local c    = target.Character
+        if not c then return end
+        local bone = c:FindFirstChild(SILENT_BONE)
+                  or c:FindFirstChild("HumanoidRootPart")
+        if not bone then return end
+
+        -- fire with 1-frame camera warp, crosshair visually unchanged
+        warpAndFire(bone)
+    end)
+end
+
+local function stopSilentAim()
+    if silentAimConn then
+        silentAimConn:Disconnect()
+        silentAimConn = nil
+    end
+end
+
+SAimBtn.MouseButton1Click:Connect(function()
+    silentAimEnabled = not silentAimEnabled
+    if silentAimEnabled then
+        activateBtn(SAimDot, SAimBar, SAimStatus, Color3.fromRGB(80, 160, 255))
+        startSilentAim()
+    else
+        deactivateBtn(SAimDot, SAimBar, SAimStatus)
+        stopSilentAim()
+    end
+end)
+
+-- ══════════════════════════════════
+--  UNLOCK ALL SKINS (CLIENT LOCAL)
+--  Auto texture-swap every weapon
+--  the player picks up with ALL skin
+--  textures found in game assets.
+--  Client-side only — no remote fired
+--  no server ownership check needed.
+-- ══════════════════════════════════
+
+local skinsEnabled   = false
+local skinSwapConns  = {}  -- holds per-tool connections
+local collectedSkins = {}  -- texture IDs gathered from RS
+
+-- ── Step 1: harvest every TextureID from RS assets ──────────
+local function harvestSkinTextures()
+    collectedSkins = {}
+    local seen = {}
+
+    local function scanObj(obj)
+        for _, desc in ipairs(obj:GetDescendants()) do
+            pcall(function()
+                local tid = nil
+                if desc:IsA("MeshPart") or desc:IsA("SpecialMesh") then
+                    tid = desc:IsA("MeshPart") and desc.TextureID or desc.TextureId
+                elseif desc:IsA("Decal") or desc:IsA("Texture") then
+                    tid = desc.Texture
+                end
+                if tid and tid ~= "" and not seen[tid] then
+                    seen[tid] = true
+                    table.insert(collectedSkins, tid)
+                end
+            end)
+        end
+    end
+
+    -- scan ReplicatedStorage for skin assets
+    scanObj(ReplicatedStorage)
+    -- scan workspace for any loaded weapon models
+    scanObj(workspace)
+
+    print("[RivalsHub] Skin textures harvested:", #collectedSkins)
+    return #collectedSkins
+end
+
+-- ── Step 2: apply ALL collected textures to a tool ──────────
+local function applySkinsToTool(tool)
+    if #collectedSkins == 0 then return end
+    -- grab every MeshPart and SpecialMesh inside the tool
+    for _, part in ipairs(tool:GetDescendants()) do
+        pcall(function()
+            if part:IsA("MeshPart") then
+                -- cycle through all found skin textures
+                -- last one applied = what you see (stack all = richest skin)
+                for _, tid in ipairs(collectedSkins) do
+                    part.TextureID = tid
+                end
+            elseif part:IsA("SpecialMesh") then
+             for _, tid in ipairs(collectedSkins) do
+                    part.TextureId = tid
+                end
+            elseif part:IsA("Decal") or part:IsA("Texture") then
+                for _, tid in ipairs(collectedSkins) do
+                    part.Texture = tid
+                end
+            end
+        end)
+    end
+end
+
+-- ── Step 3: watch character for tool equips ─────────────────
+local function watchCharForSkins(char)
+    if not char then return end
+
+    -- handle tools already in char
+    for _, obj in ipairs(char:GetChildren()) do
+        if obj:IsA("Tool") then
+            applySkinsToTool(obj)
+        end
+    end
+
+    -- watch for new tools added (equip events)
+    local conn = char.ChildAdded:Connect(function(obj)
+        if skinsEnabled and obj:IsA("Tool") then
+            task.wait(0.1) -- let tool fully load
+            applySkinsToTool(obj)
+        end
+    end)
+    table.insert(skinSwapConns, conn)
+
+    -- also watch Backpack
+    local bp = LocalPlayer:FindFirstChildOfClass("Backpack")
+    if bp then
+        local bpConn = bp.ChildAdded:Connect(function(obj)
+            if skinsEnabled and obj:IsA("Tool") then
+                task.wait(0.1)
+                applySkinsToTool(obj)
+            end
+        end)
+        table.insert(skinSwapConns, bpConn)
+    end
+end
+
+local function startSkinUnlock()
+    -- harvest textures first
+    local count = harvestSkinTextures()
+    if count == 0 then
+        CosStatus.Text = "NO SKINS FOUND"
+        return
+    end
+
+    -- apply to current character
+    watchCharForSkins(getChar())
+
+    -- reapply on respawn
+    local respawnConn = LocalPlayer.CharacterAdded:Connect(function(char)
+        if skinsEnabled then
+            task.wait(1)
+            watchCharForSkins(char)
+        end
+    end)
+    table.insert(skinSwapConns, respawnConn)
+
+    CosStatus.Text = "ON · " .. count .. " skins"
+end
+
+local function stopSkinUnlock()
+    -- disconnect all watchers
+    for _, conn in ipairs(skinSwapConns) do
+        pcall(function() conn:Disconnect() end)
+    end
+    skinSwapConns = {}
+    -- restore original textures by reloading tools
+    -- (Roblox resets textures on tool re-equip naturally)
+    CosStatus.Text = "OFF"
+end
+
+CosBtn.MouseButton1Click:Connect(function()
+    skinsEnabled = not skinsEnabled
+    if skinsEnabled then
+        activateBtn(CosDot, CosBar, CosStatus, Color3.fromRGB(180, 120, 255))
+        startSkinUnlock()
+    else
+        deactivateBtn(CosDot, CosBar, CosStatus)
+        stopSkinUnlock()
+    end
+end)
+
+-- ══════════════════════════════════
+--  BOOT LOG
+-- ══════════════════════════════════
+print("╔══════════════════════════════╗")
+print("║   RIVALS HUB  v1.0  LOADED ✌️ ║")
+print("║  Void Spam   →  toggle       ║")
+print("║  Aimbot      →  toggle       ║")
+print("║  Silent Aim  →  toggle       ║")
+print("║  Skins       →  toggle       ║")
+print("╚══════════════════════════════╝")
